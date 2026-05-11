@@ -1,0 +1,47 @@
+name: fintech-radar
+
+services:
+  backend:
+    build: ./backend
+    container_name: fintech-radar-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - backend_data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:////app/data/radar.db
+    networks:
+      - fintech-radar-net
+
+  # frontend:
+  #   build: ./frontend
+  #   container_name: fintech-radar-frontend
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - NEXT_PUBLIC_API_URL=http://fintech-radar-backend:8000
+  #   networks:
+  #     - fintech-radar-net
+
+  # ai:
+  #   build: ./ai-core
+  #   container_name: fintech-radar-ai
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8001:8001"
+  #   env_file:
+  #     - ./ai-core/.env
+  #   networks:
+  #     - fintech-radar-net
+
+volumes:
+  backend_data:
+    name: fintech-radar-backend-data
+
+networks:
+  fintech-radar-net:
+    name: fintech-radar-net

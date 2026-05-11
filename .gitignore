@@ -1,7 +1,7 @@
-﻿# Python
+# === Python ===
 __pycache__/
 *.py[cod]
-*.class
+*$py.class
 *.so
 .Python
 build/
@@ -19,32 +19,37 @@ var/
 .installed.cfg
 *.egg
 
-# Virtual environments
+# === Virtual Environments ===
 .venv/
 env/
 ENV/
+venv/
 
-# IDE
+# === IDE / Editors ===
 .idea/
 .vscode/*
 !.vscode/extensions.json
 *.swp
 *.swo
+*~
 
-# Logs
+# === Logs & Debug ===
 *.log
 logs/
+pytest_cache/
+.coverage
+htmlcov/
 
-# Environment variables
+# === Environment Secrets ===
 .env
 .env.local
 *.secret
 
-# OS
+# === OS / System ===
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Test artifacts
-pytest_cache/
-.coverage
-htmlcov/
+# === Test / Build artifacts ===
+.mypy_cache/
+.pytest_cache/
