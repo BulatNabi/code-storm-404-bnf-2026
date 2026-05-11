@@ -10,3 +10,5 @@ tenacity>=8.2.3
 playwright>=1.45.0
 # Used only by md_converter.py — pulls in transformers/torch, ~2GB.
 docling>=2.0.0
+# Used by rules_extractor.py — OpenAI-compatible client (works with Yandex Cloud LLM).
+openai>=1.50.0

@@ -90,6 +90,44 @@ CREATE TABLE IF NOT EXISTS public.documents_md (
 CREATE INDEX IF NOT EXISTS idx_documents_md_status ON public.documents_md(status);
 
 
+-- Per-document rule-extraction status (one row per doc).
+CREATE TABLE IF NOT EXISTS public.rule_extractions (
+    doc_id              VARCHAR(256) PRIMARY KEY REFERENCES public.documents(doc_id) ON DELETE CASCADE,
+    status              VARCHAR(32)  NOT NULL DEFAULT 'done',   -- done | error
+    rules_count         INTEGER      NOT NULL DEFAULT 0,
+    strategy            VARCHAR(16),                            -- direct | map_reduce
+    llm_calls           INTEGER,
+    processing_time_s   REAL,
+    extractor_version   VARCHAR(32),
+    extracted_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    error_message       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_rule_extractions_status ON public.rule_extractions(status);
+
+
+-- Atomic regulatory rules extracted from documents.
+CREATE TABLE IF NOT EXISTS public.rules (
+    rule_id             VARCHAR(64)  NOT NULL,
+    doc_id              VARCHAR(256) NOT NULL REFERENCES public.documents(doc_id) ON DELETE CASCADE,
+    tag                 VARCHAR(128),
+    title               TEXT,
+    requirement         TEXT         NOT NULL,
+    verification_method TEXT,
+    positive_examples   JSONB        DEFAULT '[]'::jsonb,
+    negative_examples   JSONB        DEFAULT '[]'::jsonb,
+    severity            VARCHAR(16)  DEFAULT 'medium'
+                          CHECK (severity IN ('critical','high','medium','low')),
+    source              JSONB,
+    extracted_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (doc_id, rule_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rules_tag      ON public.rules(tag);
+CREATE INDEX IF NOT EXISTS idx_rules_severity ON public.rules(severity);
+CREATE INDEX IF NOT EXISTS idx_rules_doc      ON public.rules(doc_id);
+
+
 -- ──────────────────────────────────────────
 --  CBU SCHEMA — Central Bank of Uzbekistan
 -- ──────────────────────────────────────────

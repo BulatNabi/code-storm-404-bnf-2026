@@ -34,7 +34,7 @@ import boto3
 import psycopg2
 from botocore.config import Config as BotoConfig
 from kafka import KafkaConsumer, KafkaProducer
-from kafka.errors import KafkaError
+from kafka.errors import CommitFailedError, KafkaError
 
 sys.path.insert(0, os.path.dirname(__file__))
 import config
@@ -101,6 +101,13 @@ class MdConverter:
             auto_offset_reset="earliest",
             value_deserializer=lambda b: json.loads(b.decode("utf-8")),
             consumer_timeout_ms=POLL_TIMEOUT_MS if once else float("inf"),
+            # Give slow conversions plenty of headroom before the broker
+            # decides we're dead and kicks us out of the group.
+            max_poll_records=1,
+            max_poll_interval_ms=int(os.getenv("MD_MAX_POLL_INTERVAL_MS", "1800000")),  # 30 min
+            session_timeout_ms=int(os.getenv("MD_SESSION_TIMEOUT_MS",   "60000")),     # 60 s
+            heartbeat_interval_ms=int(os.getenv("MD_HEARTBEAT_MS",      "10000")),     # 10 s
+            request_timeout_ms=int(os.getenv("MD_REQUEST_TIMEOUT_MS",   "65000")),     # > session
         )
         logger.info("subscribed to %s (group=%s) → bucket=%s topic=%s",
                     INPUT_TOPICS, MD_CONSUMER_GROUP, MD_S3_BUCKET, MD_TOPIC)
@@ -114,7 +121,13 @@ class MdConverter:
                 except Exception as exc:
                     logger.error("error handling %s/%d/%d: %s",
                                  msg.topic, msg.partition, msg.offset, exc, exc_info=True)
-                consumer.commit()
+                try:
+                    consumer.commit()
+                except CommitFailedError as exc:
+                    # Consumer was kicked from the group (slow rebalance). The next
+                    # poll re-joins us; just log and keep going — at-least-once is fine
+                    # because _already_converted() skips duplicates.
+                    logger.warning("commit failed (rebalance?), will retry on next poll: %s", exc)
         except StopIteration:
             pass  # consumer_timeout_ms reached in --once mode
         finally:
