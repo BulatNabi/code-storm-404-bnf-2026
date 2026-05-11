@@ -1,16 +1,29 @@
 version: "3.9"
 
+# Two independent services:
+#   • postgres      — only needed for a greenfield setup. Skip if you already
+#                     have regtech_postgres running (default on this machine).
+#   • md_converter  — Kafka consumer that converts raw docs to Markdown.
+#                     Points at host MinIO/Kafka/Postgres by default so it
+#                     works alongside the existing host containers.
+#
+# Typical use:
+#     docker compose build md_converter
+#     docker compose up    -d md_converter
+#     docker compose logs  -f md_converter
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: regtech_postgres
     restart: unless-stopped
+    profiles: ["bootstrap"]   # ← does not start by default; opt-in via --profile bootstrap
     environment:
       POSTGRES_DB: regtech
       POSTGRES_USER: regtech
       POSTGRES_PASSWORD: regtech_secret
     ports:
-      - "5432:5432"
+      - "5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -20,5 +33,33 @@ services:
       timeout: 5s
       retries: 5
 
+  md_converter:
+    build:
+      context: .
+      dockerfile: Dockerfile.md_converter
+    container_name: regtech_md_converter
+    restart: unless-stopped
+    environment:
+      # Reach the host-side services from inside the container.
+      S3_ENDPOINT_URL:         "${MD_S3_ENDPOINT_URL:-http://host.docker.internal:9010}"
+      S3_BUCKET:               "${S3_BUCKET:-regtech-docs}"
+      S3_ACCESS_KEY:           "${S3_ACCESS_KEY:-regtech}"
+      S3_SECRET_KEY:           "${S3_SECRET_KEY:-regtech_secret123}"
+      S3_PREFIX:               "${S3_PREFIX:-raw-docs}"
+      MD_S3_BUCKET:            "${MD_S3_BUCKET:-regtech-md}"
+      KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9094}"
+      DB_HOST:                 "${DB_HOST:-host.docker.internal}"
+      DB_PORT:                 "${DB_PORT:-5435}"
+      DB_NAME:                 "${DB_NAME:-regtech}"
+      DB_USER:                 "${DB_USER:-regtech}"
+      DB_PASSWORD:             "${DB_PASSWORD:-regtech_secret}"
+      LOG_LEVEL:               "${LOG_LEVEL:-INFO}"
+      HF_HOME:                 /cache/huggingface
+    volumes:
+      - md_converter_cache:/cache/huggingface
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   postgres_data:
+  md_converter_cache:

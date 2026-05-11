@@ -74,6 +74,22 @@ CREATE INDEX IF NOT EXISTS idx_documents_status    ON public.documents(processin
 CREATE INDEX IF NOT EXISTS idx_documents_hash      ON public.documents(hash_id);
 
 
+-- Converted markdown registry — one row per successfully converted doc.
+-- Lives in a separate MinIO bucket (regtech-md) but is keyed by the same doc_id.
+CREATE TABLE IF NOT EXISTS public.documents_md (
+    doc_id              VARCHAR(256) PRIMARY KEY REFERENCES public.documents(doc_id) ON DELETE CASCADE,
+    md_s3_key           TEXT,
+    md_size             BIGINT,
+    md_hash             VARCHAR(64),
+    converted_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    converter_version   VARCHAR(32),
+    status              VARCHAR(32) NOT NULL DEFAULT 'done',  -- done | error
+    error_message       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_md_status ON public.documents_md(status);
+
+
 -- ──────────────────────────────────────────
 --  CBU SCHEMA — Central Bank of Uzbekistan
 -- ──────────────────────────────────────────

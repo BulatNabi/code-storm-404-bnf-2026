@@ -131,11 +131,20 @@ class BaseWorker(ABC):
 
     def _playwright_fetch(self, url: str, *, settle_ms: int = 1_500,
                           timeout_ms: int = 60_000) -> bytes:
-        """Fetch `url` through the shared Playwright context and return rendered HTML bytes."""
+        """Fetch `url` through the shared Playwright context and return rendered HTML bytes.
+
+        Uses `domcontentloaded` (not `networkidle`) — some WAFs hold the
+        connection open forever waiting for analytics beacons, which makes
+        `networkidle` never resolve and ignore the per-call timeout.
+        We also set hard default timeouts on the context so no operation can
+        ever hang indefinitely.
+        """
         ctx = self._playwright_context()
+        ctx.set_default_timeout(timeout_ms)
+        ctx.set_default_navigation_timeout(timeout_ms)
         page = ctx.new_page()
         try:
-            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             if settle_ms:
                 page.wait_for_timeout(settle_ms)
             return page.content().encode("utf-8")

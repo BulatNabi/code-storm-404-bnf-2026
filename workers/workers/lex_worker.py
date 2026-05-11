@@ -81,8 +81,8 @@ class LexWorker(BaseWorker):
             page.wait_for_timeout(2_000)
 
             for page_num in range(1, MAX_PAGES + 1):
-                page.wait_for_load_state("domcontentloaded")
-                soup  = BeautifulSoup(page.content(), "lxml")
+                html  = self._safe_page_content(page)
+                soup  = BeautifulSoup(html, "lxml")
                 links = soup.find_all("a", href=re.compile(r"^/ru/docs/\-?\d+$"))
 
                 kept = 0
@@ -121,6 +121,26 @@ class LexWorker(BaseWorker):
 
         logger.info("[lex] discovered %d docs total", len(docs))
         return docs
+
+    @staticmethod
+    def _safe_page_content(page, attempts: int = 5) -> str:
+        """Read page.content() while the page may still be navigating.
+
+        ASP.NET postbacks can fire a second navigation milliseconds after the
+        first one settled, so a single `page.content()` call sometimes throws
+        'page is navigating'. Retry with `networkidle` waits in between.
+        """
+        import time
+        last_exc = None
+        for i in range(attempts):
+            try:
+                page.wait_for_load_state("networkidle", timeout=15_000)
+                page.wait_for_load_state("domcontentloaded")
+                return page.content()
+            except Exception as exc:
+                last_exc = exc
+                time.sleep(0.5 * (i + 1))
+        raise last_exc if last_exc else RuntimeError("page.content() failed")
 
     def _goto_next_page(self, page, current_page: int) -> bool:
         """Click the (current_page+1) button via __doPostBack.
