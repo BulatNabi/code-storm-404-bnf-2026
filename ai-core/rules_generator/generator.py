@@ -10,6 +10,7 @@ from .chunker import process_document, estimate_tokens
 from .prompts import PromptTemplates
 from .utils import assign_ids, build_metadata, validate_rules
 from common.tags_loader import get_tags_loader
+from common.rules_db import get_rules_db
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,12 @@ class RuleGenerator:
 
         # Валидируем теги
         rules = self._validate_tags(rules)
+        
+        # Сохраняем правила в централизованную базу (knowledge base)
+        if rules:
+            rules_db = get_rules_db()
+            rules_db.add_rules(rules)
+            logger.info("Saved %d rules to global knowledge base", len(rules))
 
         elapsed = time.time() - started
         chars = sum(len(c) for c in chunks)
@@ -154,8 +161,8 @@ class RuleGenerator:
         rules: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         """
-        Валидирует теги правил против tags.json.
-        Отбрасывает правила с невалидными тегами.
+        Валидирует теги правил. Если есть новые теги с описанием, добавляет их.
+        Отбрасывает правила с невалидными тегами, если они не описаны.
         """
         tags_loader = get_tags_loader()
         valid_rules = []
@@ -168,15 +175,22 @@ class RuleGenerator:
                 )
                 continue
 
+            new_tag_def = rule.pop("new_tag_definition", None)
+
             if not tags_loader.is_valid_tag(tag):
-                logger.warning(
-                    "Rule %s has invalid tag '%s', skipping. "
-                    "Valid tags: %s...",
-                    rule.get("rule_id"),
-                    tag,
-                    ", ".join(tags_loader.get_all_tags()[:5]),
-                )
-                continue
+                if new_tag_def and isinstance(new_tag_def, dict):
+                    # Динамически добавляем новый тег
+                    category = new_tag_def.get("category", "compliance")
+                    description = new_tag_def.get("description", f"Автоматически добавленный тег: {tag}")
+                    tags_loader.add_tag(tag, category, description)
+                    logger.info("Dynamically added new tag: %s", tag)
+                else:
+                    logger.warning(
+                        "Rule %s has invalid tag '%s' without new_tag_definition, skipping. ",
+                        rule.get("rule_id"),
+                        tag,
+                    )
+                    continue
 
             valid_rules.append(rule)
 

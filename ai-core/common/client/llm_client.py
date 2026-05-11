@@ -55,7 +55,7 @@ class LLMClient:
         response_format: dict | None = None,
     ) -> str:
         """Отправляет запрос к LLM."""
-        model_name = f"gpt://{self.folder}/qwen3-235b-a22b-fp8/latest"
+        model_name = f"gpt://{self.folder}/aliceai-llm/latest"
 
         logger.debug("LLMClient.request: отправка запроса...")
         logger.debug(f"Длина system_prompt: {len(system_prompt)} символов")
@@ -70,7 +70,9 @@ class LLMClient:
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=300.0,
-            response_format=response_format,
+            # Yandex API пока не поддерживает response_format={"type": "json_object"} так же как OpenAI.
+            # Если передать response_format, API может вернуть 400.
+            # response_format=response_format, 
         )
 
         result = completion.choices[0].message.content

@@ -54,6 +54,24 @@ class TagsLoader:
     def get_all_categories(self) -> Set[str]:
         return {tag_info.get("category") for tag_info in self._tags_db.values()}
 
+    def add_tag(self, tag_name: str, category: str, description: str) -> None:
+        """Динамически добавляет новый тег и сохраняет в файл."""
+        if tag_name not in self._tags_db:
+            self._tags_db[tag_name] = {
+                "tag_name": tag_name,
+                "category": category,
+                "description": description
+            }
+            self._save()
+
+    def _save(self) -> None:
+        """Сохраняет текущие теги в файл."""
+        tags_list = list(self._tags_db.values())
+        self.tags_file.write_text(
+            json.dumps(tags_list, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+
     def format_tags_for_prompt(self) -> str:
         tags_for_prompt = [
             {"tag": tag_name, "description": tag_info["description"]}
