@@ -120,18 +120,19 @@ class BaseWorker(ABC):
 
     def _process(self, doc: DocMeta) -> bool:
         content  = self.download(doc)
-        new_hash = hashlib.sha256(content).hexdigest()
-        old_hash = self._existing_hash(doc.doc_id)
+        hash_id  = hashlib.sha256(content).hexdigest()   # unique content fingerprint
 
-        if old_hash == new_hash:
+        # Skip if this exact content version already exists anywhere in DB
+        if self._hash_exists(hash_id):
+            logger.debug("[%s] content unchanged (hash_id=%s…): %s", self.source_id, hash_id[:8], doc.doc_id)
             return False
 
-        is_new  = old_hash is None
+        is_new  = not self._doc_exists(doc.doc_id)
         ext     = _guess_ext(content)
         s3_key  = f"{config.S3_PREFIX}/{self.s3_prefix}/{doc.doc_id}/{doc.doc_id}{ext}"
 
         self._upload_s3(content, s3_key)
-        self._upsert_db(doc, s3_key, new_hash, len(content), is_new)
+        self._upsert_db(doc, s3_key, hash_id, len(content), is_new)
         self._save_extra(doc)
         self._publish(DocEvent(
             event_type    = "document.new" if is_new else "document.updated",
@@ -142,22 +143,24 @@ class BaseWorker(ABC):
             language      = doc.language,
             source_url    = doc.source_url,
             s3_key        = s3_key,
-            file_hash     = new_hash,
+            file_hash     = hash_id,
             file_size     = len(content),
             discovered_at = _now_iso(),
         ))
-        logger.info("[%s] %s — %s", self.source_id,
-                    "NEW" if is_new else "UPDATED", doc.name[:80])
+        logger.info("[%s] %s — %s (hash_id=%s…)", self.source_id,
+                    "NEW" if is_new else "UPDATED", doc.name[:80], hash_id[:8])
         return True
 
-    def _existing_hash(self, doc_id: str) -> Optional[str]:
+    def _hash_exists(self, hash_id: str) -> bool:
+        """Return True if this exact content (by SHA-256) already exists in DB."""
         with self.conn.cursor() as cur:
-            cur.execute(
-                "SELECT file_hash FROM public.documents WHERE doc_id = %s",
-                (doc_id,),
-            )
-            row = cur.fetchone()
-        return row[0] if row else None
+            cur.execute("SELECT 1 FROM public.documents WHERE hash_id = %s", (hash_id,))
+            return cur.fetchone() is not None
+
+    def _doc_exists(self, doc_id: str) -> bool:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM public.documents WHERE doc_id = %s", (doc_id,))
+            return cur.fetchone() is not None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
     def _upload_s3(self, content: bytes, s3_key: str) -> None:
@@ -167,7 +170,7 @@ class BaseWorker(ABC):
         self,
         doc: DocMeta,
         s3_key: str,
-        file_hash: str,
+        hash_id: str,
         file_size: int,
         is_new: bool,
     ) -> None:
@@ -176,23 +179,23 @@ class BaseWorker(ABC):
                 cur.execute(
                     """
                     INSERT INTO public.documents
-                        (doc_id, source_id, name, source_url, s3_key,
-                         file_hash, file_size, category, language)
+                        (doc_id, hash_id, source_id, name, source_url,
+                         s3_key, file_size, category, language)
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (doc_id) DO NOTHING
                     """,
-                    (doc.doc_id, doc.source_id, doc.name, doc.source_url,
-                     s3_key, file_hash, file_size, doc.category, doc.language),
+                    (doc.doc_id, hash_id, doc.source_id, doc.name, doc.source_url,
+                     s3_key, file_size, doc.category, doc.language),
                 )
             else:
                 cur.execute(
                     """
                     UPDATE public.documents
-                    SET s3_key=%s, file_hash=%s, file_size=%s,
+                    SET s3_key=%s, hash_id=%s, file_size=%s,
                         last_updated_at=NOW(), processing_status='pending'
                     WHERE doc_id=%s
                     """,
-                    (s3_key, file_hash, file_size, doc.doc_id),
+                    (s3_key, hash_id, file_size, doc.doc_id),
                 )
 
     def _touch_source(self) -> None:

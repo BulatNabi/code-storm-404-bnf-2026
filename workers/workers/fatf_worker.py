@@ -136,9 +136,22 @@ class FatfWorker(BaseWorker):
         return docs
 
     def download(self, doc: DocMeta) -> bytes:
-        with httpx.Client(headers=config.HTTP_HEADERS, timeout=config.HTTP_TIMEOUT,
+        headers = {
+            **config.HTTP_HEADERS,
+            "Referer": "https://www.fatf-gafi.org/",
+            "Accept": "application/pdf,*/*",
+        }
+        with httpx.Client(headers=headers, timeout=config.HTTP_TIMEOUT,
                           follow_redirects=True) as client:
             r = client.get(doc.source_url)
+            if r.status_code == 403:
+                # FATF blocks hot-linking; fetch the HTML page first to get a valid session
+                page_url = doc.source_url.replace("/content/dam/fatf-gafi/", "/en/publications/").replace(".pdf", ".html")
+                try:
+                    client.get("https://www.fatf-gafi.org/")  # warm session
+                except Exception:
+                    pass
+                r = client.get(doc.source_url, headers={**headers, "Referer": "https://www.fatf-gafi.org/en/publications/"})
             r.raise_for_status()
             return r.content
 

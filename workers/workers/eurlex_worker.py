@@ -151,21 +151,25 @@ class EurLexWorker(BaseWorker):
         celex = doc.extra["celex"]
         lang  = doc.language.upper()
 
-        # Try PDF first
-        pdf_url = _pdf_url(celex, lang)
-        try:
-            content = self._fetch_bytes(pdf_url)
-            if len(content) > 1024:
-                logger.debug("[eurlex] downloaded PDF for %s (%d bytes)", celex, len(content))
-                return content
-        except Exception as exc:
-            logger.warning("[eurlex] PDF failed for %s: %s — trying HTML", celex, exc)
+        for url in (_pdf_url(celex, lang), _html_url(celex, lang)):
+            try:
+                content = self._fetch_bytes(url)
+                # EUR-Lex returns 202 + AWS-WAF challenge page (~2KB) for datacenter IPs.
+                # Detect by checking Content-Type and minimum size for a real document.
+                is_pdf  = content[:4] == b"%PDF"
+                is_real_html = len(content) > 50_000  # real regulation HTML is large
+                if is_pdf or is_real_html:
+                    logger.debug("[eurlex] downloaded %s (%d bytes)", celex, len(content))
+                    return content
+                logger.warning("[eurlex] WAF/empty response for %s (%d bytes), skipping", celex, len(content))
+            except Exception as exc:
+                logger.warning("[eurlex] fetch failed for %s: %s", celex, exc)
 
-        # Fallback: HTML version
-        html_url = _html_url(celex, lang)
-        content = self._fetch_bytes(html_url)
-        logger.debug("[eurlex] downloaded HTML for %s (%d bytes)", celex, len(content))
-        return content
+        # Both endpoints blocked — return a stub so the doc is registered in DB
+        # and retried on next run (IP may rotate or WAF timeout)
+        logger.error("[eurlex] could not download %s (WAF blocked) — storing stub", celex)
+        stub = f"EUR-Lex document {celex} — {doc.name}\nBlocked by WAF, will retry.\n".encode()
+        return stub
 
     def _save_extra(self, doc: DocMeta) -> None:
         with self.conn.cursor() as cur:

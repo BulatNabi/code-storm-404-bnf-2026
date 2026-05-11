@@ -52,11 +52,11 @@ ON CONFLICT DO NOTHING;
 -- Central documents registry
 CREATE TABLE IF NOT EXISTS public.documents (
     doc_id              VARCHAR(256) PRIMARY KEY,
+    hash_id             VARCHAR(64)  UNIQUE,          -- SHA-256 of file content (content dedup key)
     source_id           VARCHAR(64)  NOT NULL REFERENCES public.sources(source_id),
     name                TEXT         NOT NULL,
     source_url          TEXT         NOT NULL,
     s3_key              TEXT,
-    file_hash           VARCHAR(128),
     file_size           BIGINT,
     category            VARCHAR(64)  REFERENCES public.doc_categories(category_id),
     language            VARCHAR(8)   NOT NULL DEFAULT 'ru',
@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS public.documents (
 CREATE INDEX IF NOT EXISTS idx_documents_source    ON public.documents(source_id);
 CREATE INDEX IF NOT EXISTS idx_documents_category  ON public.documents(category);
 CREATE INDEX IF NOT EXISTS idx_documents_status    ON public.documents(processing_status);
+CREATE INDEX IF NOT EXISTS idx_documents_hash      ON public.documents(hash_id);
 
 
 -- ──────────────────────────────────────────
