@@ -8,10 +8,15 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import User, Project, Analysis
+from app.models import User, Project, Analysis, AnalysisFile
 from app.schemas.analysis import AnalysisOut, AnalysisHistoryResponse, FileInfo
+from app import s3
 
 router = APIRouter(prefix="/projects", tags=["Analysis"])
+
+ALLOWED_MIME_TYPES = {"application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 МБ
+MAX_FILES = 5
 
 # Stub AI response — заменится реальным вызовом AI-сервиса
 _STUB_RESULT = {
@@ -51,14 +56,24 @@ def _get_project_or_404(project_id: str, user_id: str, db: Session) -> Project:
     return project
 
 
+def _file_infos(analysis: Analysis) -> List[FileInfo]:
+    result = []
+    for f in analysis.files:
+        try:
+            url = s3.get_presigned_url(f.s3_key)
+        except Exception:
+            url = None
+        result.append(FileInfo(name=f.filename, size=f.size, url=url))
+    return result
+
+
 def _analysis_out(a: Analysis) -> AnalysisOut:
     result = json.loads(a.result_json) if a.result_json else {}
-    files = [FileInfo(name=n, size=0) for n in (a.file_names or "").split(",") if n]
     return AnalysisOut(
         id=a.id,
         project_id=a.project_id,
         text=a.text,
-        files=files,
+        files=_file_infos(a),
         zones=result.get("zones", []),
         risks=result.get("risks", []),
         checklist=result.get("checklist", []),
@@ -83,16 +98,51 @@ async def analyze(
 
     _get_project_or_404(project_id, current_user.id, db)
 
-    file_names = ",".join(f.filename for f in files) if files else ""
+    # Валидация файлов
+    if files:
+        if len(files) > MAX_FILES:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail={"code": "TOO_MANY_FILES", "message": f"Максимум {MAX_FILES} файлов"})
+        for f in files:
+            if f.content_type not in ALLOWED_MIME_TYPES:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    detail={"code": "UNSUPPORTED_FORMAT", "message": f"{f.filename}: только PDF и DOCX"})
 
-    # Сохраняем анализ в БД сразу (result_json заполнится после стрима)
+    # Создаём запись анализа
     analysis = Analysis(
         project_id=project_id,
         text=text or "",
-        file_names=file_names,
         result_json=json.dumps(_STUB_RESULT, ensure_ascii=False),
     )
     db.add(analysis)
+    db.flush()  # получаем analysis.id до commit
+
+    # Загружаем файлы в S3
+    uploaded: List[AnalysisFile] = []
+    if files:
+        for upload in files:
+            file_bytes = await upload.read()
+            if len(file_bytes) > MAX_FILE_SIZE:
+                db.rollback()
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    detail={"code": "FILE_TOO_LARGE", "message": f"{upload.filename}: превышает 10 МБ"})
+            try:
+                key, size = s3.upload_file(file_bytes, analysis.id, upload.filename)
+            except Exception as e:
+                db.rollback()
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                    detail={"code": "S3_UNAVAILABLE", "message": f"Не удалось загрузить файл: {e}"})
+
+            af = AnalysisFile(
+                analysis_id=analysis.id,
+                filename=upload.filename,
+                s3_key=key,
+                size=size,
+                mime_type=upload.content_type,
+            )
+            db.add(af)
+            uploaded.append(af)
+
     db.commit()
     db.refresh(analysis)
 
@@ -137,11 +187,10 @@ def get_history(
     items = []
     for a in analyses:
         result = json.loads(a.result_json) if a.result_json else {}
-        files = [FileInfo(name=n, size=0) for n in (a.file_names or "").split(",") if n]
         items.append({
             "id": a.id,
             "text_preview": a.text[:120] + ("..." if len(a.text) > 120 else ""),
-            "files": files,
+            "files": _file_infos(a),
             "zones": result.get("zones", []),
             "created_at": a.created_at.isoformat(),
         })

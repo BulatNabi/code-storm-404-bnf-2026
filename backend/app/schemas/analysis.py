@@ -24,6 +24,7 @@ class ChecklistGroup(BaseModel):
 class FileInfo(BaseModel):
     name: str
     size: int
+    url: Optional[str] = None  # presigned S3 URL, генерируется при отдаче
 
 
 class AnalysisOut(BaseModel):

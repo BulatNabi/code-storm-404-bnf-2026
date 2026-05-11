@@ -45,15 +45,26 @@ class Analysis(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    # исходный текст user story
     text: Mapped[str] = mapped_column(Text, nullable=False)
-    # имена прикреплённых файлов через запятую (MVP — без хранения бинарей)
-    file_names: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # полный результат анализа от AI-сервиса — JSON-строка
     result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     project: Mapped["Project"] = relationship(back_populates="analyses")
+    files: Mapped[list["AnalysisFile"]] = relationship(back_populates="analysis", cascade="all, delete-orphan")
+
+
+class AnalysisFile(Base):
+    __tablename__ = "analysis_files"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    analysis_id: Mapped[str] = mapped_column(String, ForeignKey("analyses.id"), nullable=False)
+    filename: Mapped[str] = mapped_column(String, nullable=False)
+    s3_key: Mapped[str] = mapped_column(String, nullable=False)  # fintech-radar/analyses/{analysis_id}/{filename}
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    analysis: Mapped["Analysis"] = relationship(back_populates="files")
 
 
 class JiraConnection(Base):
