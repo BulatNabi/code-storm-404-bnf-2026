@@ -2,9 +2,18 @@
 Lex Worker — Lex.uz National Legislation of Uzbekistan
 https://lex.uz/ru/
 
-Navigates via Playwright because pagination uses ASP.NET __doPostBack (not URL params).
-Entry point: /ru/search/nat?lang=1  — all national acts, sorted newest-first.
-Filters docs by fintech-relevant keywords in the document title.
+Entry point: /ru/search/ext?lang=1&okoz=6536 — the "Законодательство о
+финансах и кредите. Банковская деятельность" classifier rollup (~7447 docs
+across ~373 pages of 20 results each, newest first). Every result is by
+definition finance/banking law, so we don't post-filter by title.
+
+Pagination is ASP.NET __doPostBack: the visible window is 1..10 with a
+"Следующий" button that advances by one page (so we click it to cross the
+window boundary). Walk until the next button is gone.
+
+Both discover() and download() share the BaseWorker Playwright session
+(one Chromium per run, not one per document).
+
 Publishes to Kafka topic: reg.lex
 """
 
@@ -14,7 +23,7 @@ import logging
 import re
 import sys
 import os
-from typing import List
+from typing import List, Optional
 from urllib.parse import urljoin
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -23,36 +32,34 @@ import config
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://lex.uz"
+BASE_URL   = "https://lex.uz"
+SEARCH_URL = f"{BASE_URL}/ru/search/ext?lang=1&okoz=6536"
 
-# Fetch this many pages per run (20 docs/page → 400 docs max, newest first)
-MAX_PAGES = 20
+# Effectively uncapped — discover() stops when there is no "next" button.
+MAX_PAGES = int(os.getenv("LEX_MAX_PAGES", "1000"))
 
-# Finance/banking classifier — entry point
-SEARCH_URL = f"{BASE_URL}/ru/search/nat?lang=1"
-
-FINTECH_KEYWORDS: list[tuple[str, str]] = [
-    (r"(отмыван|финансир.{0,10}террор|легализац|пфм|aml|финмонитор)", "aml_cft"),
-    (r"(платежн|перевод|электронн.?деньг|кошел[её]к|эквайринг|p2p|расчет)", "payments"),
-    (r"(идентификац|верификац|kyc|надлежащ.?проверк)", "kyc"),
+# Title-based category assignment (NOT a filter — we keep every doc).
+# Falls back to None (NULL category) when no pattern matches.
+TITLE_CATEGORIES: list[tuple[str, str]] = [
+    (r"(отмыван|финансир.{0,10}террор|легализац|пфм|aml|финмонитор|подозрительн)", "aml_cft"),
+    (r"(платежн|перевод|электронн.?деньг|кошел[её]к|эквайринг|p2p|расчет|sepa)", "payments"),
+    (r"(идентификац|верификац|kyc|надлежащ.?проверк|onboarding)", "kyc"),
     (r"(персональн.?данн|приватност|защит.?персон)", "data_protection"),
-    (r"(лицензи|допуск|разрешени.{0,15}(банк|платеж|финанс))", "licensing"),
+    (r"(лицензи|допуск|разрешени.{0,15}(банк|платеж|финанс|кредитн))", "licensing"),
     (r"(информационн.?безопасност|киберб|защит.?(информ|систем))", "cybersecurity"),
     (r"(потребител.{0,20}(защит|прав|кредит)|защит.?потребител)", "consumer_protection"),
     (r"(крипт|цифров.?актив|блокчейн|токен|виртуальн.?валют)", "crypto"),
     (r"(искусственн.?интеллект|скоринг|алгоритм.?(решени|кредит))", "ai_scoring"),
-    (r"(отчетност|аудит|хранени.?данн|надзор.{0,15}(банк|финанс))", "reporting"),
-    (r"(банк|небанк.?кредит|микрофинанс|микрокредит|ипотек)", "licensing"),
-    (r"(валют|обмен.{0,10}валют|конвертац)", "payments"),
+    (r"(отчетност|аудит|надзор.{0,15}(банк|финанс))", "reporting"),
 ]
 
 
-def _classify_title(title: str) -> str | None:
+def _classify_title(title: str) -> Optional[str]:
     t = title.lower()
-    for pattern, category in FINTECH_KEYWORDS:
+    for pattern, category in TITLE_CATEGORIES:
         if re.search(pattern, t):
             return category
-    return None  # None = not fintech-relevant, skip
+    return None  # let the AI core classify later
 
 
 class LexWorker(BaseWorker):
@@ -61,134 +68,110 @@ class LexWorker(BaseWorker):
     s3_prefix   = "lex"
 
     def discover(self) -> List[DocMeta]:
-        from playwright.sync_api import sync_playwright
         from bs4 import BeautifulSoup
 
         docs: List[DocMeta] = []
         seen: set[str] = set()
 
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            try:
-                context = browser.new_context(
-                    user_agent=config.HTTP_HEADERS.get("User-Agent", "Mozilla/5.0"),
-                )
-                page = context.new_page()
+        ctx = self._playwright_context()
+        page = ctx.new_page()
+        try:
+            logger.info("[lex] loading search page: %s", SEARCH_URL)
+            page.goto(SEARCH_URL, wait_until="networkidle", timeout=30_000)
+            page.wait_for_timeout(2_000)
 
-                logger.info("[lex] loading search page...")
-                page.goto(SEARCH_URL, wait_until="networkidle", timeout=30_000)
-                page.wait_for_timeout(2_000)  # extra settle time for ASP.NET
+            for page_num in range(1, MAX_PAGES + 1):
+                page.wait_for_load_state("domcontentloaded")
+                soup  = BeautifulSoup(page.content(), "lxml")
+                links = soup.find_all("a", href=re.compile(r"^/ru/docs/\-?\d+$"))
 
-                for page_num in range(1, MAX_PAGES + 1):
-                    page.wait_for_load_state("domcontentloaded")
-                    soup = BeautifulSoup(page.content(), "lxml")
-                    links = soup.find_all("a", href=re.compile(r"^/ru/docs/\-?\d+$"))
+                kept = 0
+                for link in links:
+                    href    = link["href"]
+                    lex_id  = href.strip("/").split("/")[-1].lstrip("-")
+                    doc_id  = f"lex-{lex_id}"
+                    if doc_id in seen:
+                        continue
+                    seen.add(doc_id)
 
-                    found = 0
-                    for link in links:
-                        href    = link["href"]
-                        lex_id  = href.strip("/").split("/")[-1].lstrip("-")
-                        doc_id  = f"lex-{lex_id}"
-                        if doc_id in seen:
-                            continue
-                        seen.add(doc_id)
+                    title    = link.get_text(strip=True) or doc_id
+                    category = _classify_title(title)
+                    docs.append(DocMeta(
+                        doc_id     = doc_id,
+                        name       = title,
+                        source_url = urljoin(BASE_URL, href),
+                        source_id  = self.source_id,
+                        category   = category,
+                    ))
+                    kept += 1
 
-                        title    = link.get_text(strip=True) or doc_id
-                        category = _classify_title(title)
-                        if category is None:
-                            continue  # skip non-fintech
+                if page_num % 10 == 1 or page_num <= 5:
+                    logger.info("[lex] page %d: %d links, %d new (running total: %d)",
+                                page_num, len(links), kept, len(docs))
 
-                        docs.append(DocMeta(
-                            doc_id     = doc_id,
-                            name       = title,
-                            source_url = urljoin(BASE_URL, href),
-                            source_id  = self.source_id,
-                            category   = category,
-                        ))
-                        found += 1
+                if page_num >= MAX_PAGES:
+                    logger.info("[lex] reached LEX_MAX_PAGES=%d; stopping", MAX_PAGES)
+                    break
+                if not self._goto_next_page(page, page_num):
+                    logger.info("[lex] no next page after page %d — done", page_num)
+                    break
+                page.wait_for_timeout(1_500)
+        finally:
+            page.close()
 
-                    logger.info("[lex] page %d: %d links, %d fintech kept", page_num, len(links), found)
-
-                    if page_num >= MAX_PAGES:
-                        break
-
-                    # Navigate to next page via __doPostBack pagination buttons
-                    if not self._goto_next_page(page, page_num):
-                        logger.info("[lex] no next page after page %d", page_num)
-                        break
-                    page.wait_for_timeout(1_500)  # wait for ASP.NET postback to settle
-
-            finally:
-                browser.close()
-
-        logger.info("[lex] discovered %d fintech docs total", len(docs))
+        logger.info("[lex] discovered %d docs total", len(docs))
         return docs
 
     def _goto_next_page(self, page, current_page: int) -> bool:
-        """Click the (current_page+1) button using __doPostBack."""
+        """Click the (current_page+1) button via __doPostBack.
+
+        Collects all paginator anchors' text+href in a single page.evaluate()
+        so the live ElementHandles don't go stale if the page navigates while
+        we're inspecting them (an ASP.NET postback can fire mid-iteration).
+        """
         from playwright.sync_api import TimeoutError as PWTimeout
 
-        target_text = str(current_page + 1)
-
-        # Find pagination buttons by class
-        buttons = page.query_selector_all("a.btn_pgn_extend")
-        for btn in buttons:
-            if btn.text_content().strip() == target_text:
-                href = btn.get_attribute("href") or ""
-                m = re.search(r"__doPostBack\('([^']+)'", href)
-                if m:
-                    try:
-                        page.evaluate(f"__doPostBack('{m.group(1)}', '')")
-                        page.wait_for_load_state("networkidle", timeout=15_000)
-                        return True
-                    except PWTimeout:
-                        return False
-
-        # Fallback: try clicking any button with matching text
         try:
-            btn = page.query_selector(f"a:has-text('{target_text}')")
-            if btn:
-                href = btn.get_attribute("href") or ""
-                m = re.search(r"__doPostBack\('([^']+)'", href)
-                if m:
-                    page.evaluate(f"__doPostBack('{m.group(1)}', '')")
-                    page.wait_for_load_state("networkidle", timeout=15_000)
-                    return True
+            candidates = page.evaluate("""
+                () => Array.from(
+                    document.querySelectorAll('a.btn_pgn_extend, a.btn_pgn')
+                ).map(a => ({
+                    text: (a.textContent || '').trim(),
+                    href: a.getAttribute('href') || ''
+                }))
+            """) or []
         except Exception:
-            pass
+            return False
 
+        target_text = str(current_page + 1)
+        next_labels = {"следующий", "next", "›", ">"}
+
+        def _try_click(entry: dict) -> bool:
+            m = re.search(r"__doPostBack\('([^']+)'", entry.get("href", ""))
+            if not m:
+                return False
+            try:
+                page.evaluate(f"__doPostBack('{m.group(1)}', '')")
+                page.wait_for_load_state("networkidle", timeout=20_000)
+                return True
+            except (PWTimeout, Exception):
+                return False
+
+        for entry in candidates:
+            if entry["text"] == target_text and _try_click(entry):
+                return True
+        for entry in candidates:
+            if entry["text"].lower() in next_labels and _try_click(entry):
+                return True
         return False
 
     def download(self, doc: DocMeta) -> bytes:
-        from playwright.sync_api import sync_playwright
-        from bs4 import BeautifulSoup
-
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            try:
-                context = browser.new_context(
-                    user_agent=config.HTTP_HEADERS.get("User-Agent", "Mozilla/5.0"),
-                )
-                page = context.new_page()
-                page.goto(doc.source_url, wait_until="networkidle", timeout=30_000)
-                soup = BeautifulSoup(page.content(), "lxml")
-
-                # Try to find a PDF/DOCX download link
-                for ext in ("pdf", "docx", "doc"):
-                    link = soup.find("a", href=re.compile(rf"\.{ext}$", re.I))
-                    if link:
-                        file_url = urljoin(BASE_URL, link["href"])
-                        try:
-                            resp = context.request.get(file_url, timeout=30_000)
-                            if resp.ok and resp.body():
-                                return resp.body()
-                        except Exception:
-                            pass
-
-                # Fallback: return full HTML content
-                return page.content().encode("utf-8")
-            finally:
-                browser.close()
+        """Render the lex.uz doc page and return its HTML."""
+        try:
+            return self._playwright_fetch(doc.source_url, settle_ms=2_000, timeout_ms=45_000)
+        except Exception as exc:
+            logger.error("[lex] download %s failed: %s", doc.source_url, exc)
+            return b""
 
     def _save_extra(self, doc: DocMeta) -> None:
         lex_id = doc.doc_id.replace("lex-", "")
@@ -206,4 +189,4 @@ class LexWorker(BaseWorker):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    LexWorker().run_loop(interval_hours=config.LEX_INTERVAL_HOURS)
+    LexWorker().run_once()

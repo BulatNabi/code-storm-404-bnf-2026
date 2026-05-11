@@ -66,14 +66,21 @@ class BaseWorker(ABC):
     kafka_topic: str
     s3_prefix:   str
 
+    PW_USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/121.0.0.0 Safari/537.36"
+    )
+
     def __init__(self) -> None:
         self.s3 = boto3.client(
             "s3",
             endpoint_url=config.S3_ENDPOINT_URL,
             aws_access_key_id=config.S3_ACCESS_KEY,
             aws_secret_access_key=config.S3_SECRET_KEY,
-            config=BotoConfig(retries={"max_attempts": 3}),
+            config=BotoConfig(retries={"max_attempts": 3}, signature_version="s3v4"),
         )
+        self._ensure_bucket()
         self.producer = KafkaProducer(
             bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS.split(","),
             value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode("utf-8"),
@@ -89,6 +96,78 @@ class BaseWorker(ABC):
         )
         self.conn.autocommit = True
 
+        # Shared Playwright session — initialized lazily, torn down at end of run_once.
+        self._pw = None
+        self._pw_browser = None
+        self._pw_context = None
+        self._pw_warmed: set[str] = set()
+
+    def _playwright_context(self):
+        """Return a shared Playwright browser context, launching on first use."""
+        if self._pw_context is None:
+            from playwright.sync_api import sync_playwright
+            self._pw = sync_playwright().start()
+            self._pw_browser = self._pw.chromium.launch(headless=True)
+            self._pw_context = self._pw_browser.new_context(
+                user_agent=self.PW_USER_AGENT,
+                locale="en-US",
+                viewport={"width": 1280, "height": 720},
+            )
+        return self._pw_context
+
+    def _playwright_warm_up(self, origin: str) -> None:
+        """Visit `origin` once per run so subsequent fetches share its cookies/WAF clearance."""
+        if origin in self._pw_warmed:
+            return
+        try:
+            ctx = self._playwright_context()
+            page = ctx.new_page()
+            page.goto(origin, wait_until="domcontentloaded", timeout=20_000)
+            page.wait_for_timeout(1_000)
+            page.close()
+            self._pw_warmed.add(origin)
+        except Exception as exc:
+            logger.warning("[%s] playwright warm-up failed for %s: %s", self.source_id, origin, exc)
+
+    def _playwright_fetch(self, url: str, *, settle_ms: int = 1_500,
+                          timeout_ms: int = 60_000) -> bytes:
+        """Fetch `url` through the shared Playwright context and return rendered HTML bytes."""
+        ctx = self._playwright_context()
+        page = ctx.new_page()
+        try:
+            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            if settle_ms:
+                page.wait_for_timeout(settle_ms)
+            return page.content().encode("utf-8")
+        finally:
+            page.close()
+
+    def _close_playwright(self) -> None:
+        for attr in ("_pw_context", "_pw_browser", "_pw"):
+            obj = getattr(self, attr, None)
+            if obj is None:
+                continue
+            try:
+                if attr == "_pw":
+                    obj.stop()
+                else:
+                    obj.close()
+            except Exception:
+                pass
+            setattr(self, attr, None)
+        self._pw_warmed.clear()
+
+    def _ensure_bucket(self) -> None:
+        try:
+            self.s3.head_bucket(Bucket=config.S3_BUCKET)
+        except Exception:
+            try:
+                self.s3.create_bucket(Bucket=config.S3_BUCKET)
+                logger.info("[%s] created bucket %s", self.source_id, config.S3_BUCKET)
+            except Exception as exc:
+                logger.warning("[%s] could not ensure bucket %s: %s",
+                               self.source_id, config.S3_BUCKET, exc)
+
     # ── public API ──────────────────────────────────────────────────────────
 
     def run_once(self) -> int:
@@ -98,12 +177,19 @@ class BaseWorker(ABC):
         docs = self.discover()
         logger.info("[%s] discovered %d documents", self.source_id, len(docs))
         count = 0
-        for doc in docs:
+        try:
+            for doc in docs:
+                try:
+                    if self._process(doc):
+                        count += 1
+                except Exception as exc:
+                    logger.error("[%s] error processing %s: %s", self.source_id, doc.doc_id, exc, exc_info=True)
+        finally:
             try:
-                if self._process(doc):
-                    count += 1
+                self.producer.flush(timeout=10)
             except Exception as exc:
-                logger.error("[%s] error processing %s: %s", self.source_id, doc.doc_id, exc, exc_info=True)
+                logger.warning("[%s] kafka flush failed: %s", self.source_id, exc)
+            self._close_playwright()
         logger.info("[%s] run done — new/updated: %d / %d", self.source_id, count, len(docs))
         return count
 
@@ -118,8 +204,15 @@ class BaseWorker(ABC):
 
     # ── internals ───────────────────────────────────────────────────────────
 
+    MIN_CONTENT_BYTES = 1_024  # smaller payloads are almost always WAF stubs / error pages
+
     def _process(self, doc: DocMeta) -> bool:
         content  = self.download(doc)
+        if len(content) < self.MIN_CONTENT_BYTES:
+            logger.warning("[%s] skipping %s — suspiciously small payload (%d bytes)",
+                           self.source_id, doc.doc_id, len(content))
+            return False
+
         hash_id  = hashlib.sha256(content).hexdigest()   # unique content fingerprint
 
         # Skip if this exact content version already exists anywhere in DB
@@ -188,14 +281,19 @@ class BaseWorker(ABC):
                      s3_key, file_size, doc.category, doc.language),
                 )
             else:
+                # If another doc_id already owns this hash (rare), don't crash on the unique constraint.
                 cur.execute(
                     """
                     UPDATE public.documents
                     SET s3_key=%s, hash_id=%s, file_size=%s,
                         last_updated_at=NOW(), processing_status='pending'
                     WHERE doc_id=%s
+                      AND NOT EXISTS (
+                        SELECT 1 FROM public.documents d2
+                        WHERE d2.hash_id=%s AND d2.doc_id<>%s
+                      )
                     """,
-                    (s3_key, hash_id, file_size, doc.doc_id),
+                    (s3_key, hash_id, file_size, doc.doc_id, hash_id, doc.doc_id),
                 )
 
     def _touch_source(self) -> None:
@@ -231,12 +329,17 @@ class BaseWorker(ABC):
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 def _guess_ext(content: bytes) -> str:
+    head = content[:1024].lstrip().lower()
     if content[:4] == b"%PDF":
         return ".pdf"
     if content[:2] == b"PK":
         return ".docx"
-    if content[:5] == b"<html" or content[:9] == b"<!DOCTYPE":
+    # Detect XHTML/HTML before generic XML — many EUR-Lex pages declare <?xml
+    # but the root element is <html>, which is conceptually still HTML.
+    if b"<html" in head[:512] or head.startswith(b"<!doctype"):
         return ".html"
+    if head.startswith(b"<?xml"):
+        return ".xml"
     return ".bin"
 
 

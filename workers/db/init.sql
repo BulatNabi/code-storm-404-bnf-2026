@@ -44,8 +44,7 @@ CREATE TABLE IF NOT EXISTS public.sources (
 INSERT INTO public.sources (source_id, name, base_url, kafka_topic, schedule_hours) VALUES
   ('cbu',    'Центральный банк Узбекистана',  'https://cbu.uz/ru/documents/',   'reg.cbu',    12),
   ('lex',    'Lex.uz — Законодательство РУ',  'https://lex.uz/ru/',             'reg.lex',    24),
-  ('eurlex', 'EUR-Lex — EU Regulations',      'https://eur-lex.europa.eu/',     'reg.eurlex', 168),
-  ('fatf',   'FATF — AML/CFT Standards',      'https://www.fatf-gafi.org/',     'reg.fatf',   168)
+  ('eurlex', 'EUR-Lex — EU Regulations',      'https://eur-lex.europa.eu/',     'reg.eurlex', 168)
 ON CONFLICT DO NOTHING;
 
 
@@ -142,21 +141,3 @@ CREATE TABLE IF NOT EXISTS eurlex.regulations (
 CREATE INDEX IF NOT EXISTS idx_eurlex_code ON eurlex.regulations(regulation_code);
 
 
--- ──────────────────────────────────────────
---  FATF SCHEMA
--- ──────────────────────────────────────────
-CREATE SCHEMA IF NOT EXISTS fatf;
-
-CREATE TABLE IF NOT EXISTS fatf.reports (
-    id              SERIAL       PRIMARY KEY,
-    doc_id          VARCHAR(256) REFERENCES public.documents(doc_id),
-    report_type     VARCHAR(64)  NOT NULL,  -- recommendations | mutual_eval | guidance | typologies
-    country_code    VARCHAR(8),             -- ISO code, NULL for global docs
-    publication_year INTEGER,
-    title           TEXT,
-    pdf_url         TEXT,
-    checked_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_fatf_type    ON fatf.reports(report_type);
-CREATE INDEX IF NOT EXISTS idx_fatf_country ON fatf.reports(country_code);

@@ -2,8 +2,15 @@
 CBU Worker — Central Bank of Uzbekistan
 https://cbu.uz/ru/documents/
 
-Scrapes all normative document categories.
-Pagination uses PAGEN_1=N (Bitrix CMS style).
+Each CBU detail page is just a stub of metadata that links out to lex.uz
+where the actual normative-act text lives. So:
+
+  discover()  walks the CBU listing pages and yields one DocMeta per item,
+              capturing the CBU registry metadata in `extra`.
+  download()  follows the lex.uz link on the detail page and renders the
+              law text through the shared Playwright session. If no lex
+              link is present, falls back to the detail HTML.
+
 Publishes to Kafka topic: reg.cbu
 """
 
@@ -13,7 +20,7 @@ import logging
 import re
 import sys
 import os
-from typing import List
+from typing import List, Optional
 from urllib.parse import urljoin
 
 import httpx
@@ -27,13 +34,17 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://cbu.uz"
 
-# All document categories on cbu.uz (discovered via Playwright)
+# All document categories on cbu.uz (probed against the live index).
+# Default category is a starting hint; the per-title classifier may override it.
 CBU_CATEGORIES = {
-    "3311": "licensing",    # Законы
-    "3312": "licensing",    # Указы Президента
-    "3313": "licensing",    # Постановления Президента
-    "3314": "licensing",    # Постановления Кабинета Министров
-    "3315": "licensing",    # Нормативные акты ЦБ  ← main source
+    "3311": "licensing",            # Законы                                       (~60 docs)
+    "3312": "licensing",            # Указы Президента                             (~90 docs)
+    "3313": "licensing",            # Постановления Президента                     (~135 docs)
+    "3314": "licensing",            # Постановления Кабинета Министров             (~30 docs)
+    "3315": "licensing",            # Нормативные акты ЦБ  ← main source           (~360 docs)
+    "3316": "reporting",            # Комментарии к нормативным актам              (~30 docs)
+    "3317": "licensing",            # Кодекс профессиональной этики                (1 doc)
+    "3344": "consumer_protection",  # Невмешательство в предпринимательскую деят.  (~5 docs)
 }
 
 TITLE_KEYWORDS: list[tuple[str, str]] = [
@@ -48,6 +59,8 @@ TITLE_KEYWORDS: list[tuple[str, str]] = [
     (r"(искусственн.?интеллект|ai|скоринг|алгоритм.?(решени|кредит))", "ai_scoring"),
     (r"(отчетност|аудит|хранени.?данн|надзор|мониторинг)", "reporting"),
 ]
+
+LEX_HREF_RE = re.compile(r"lex\.uz/(?:[a-z]{2}/)?docs?/(\d+)", re.I)
 
 
 def _classify_title(title: str) -> str:
@@ -86,8 +99,6 @@ class CBUWorker(BaseWorker):
                 break
 
             soup = BeautifulSoup(html, "lxml")
-
-            # Find document links: /ru/documents/{cat_code}/{doc_id}/
             links = soup.find_all(
                 "a",
                 href=re.compile(rf"^/ru/documents/{cat_code}/\d+/?$"),
@@ -109,9 +120,9 @@ class CBUWorker(BaseWorker):
                     source_url = urljoin(BASE_URL, link["href"]),
                     source_id  = self.source_id,
                     category   = _classify_title(title),
+                    extra      = {"cbu_category": cat_code},
                 ))
 
-            # Check if next page exists via PAGEN_1=page+1 link
             next_link = soup.find("a", href=re.compile(rf"PAGEN_1={page + 1}"))
             if not next_link:
                 logger.info("[cbu] cat=%s: last page is %d (%d docs)", cat_code, page, len(docs))
@@ -121,33 +132,76 @@ class CBUWorker(BaseWorker):
         return docs
 
     def download(self, doc: DocMeta) -> bytes:
-        file_url = self._find_file_url(doc.source_url)
-        if file_url:
-            return self._fetch_bytes(file_url)
-        return self._fetch_html(doc.source_url).encode("utf-8")
-
-    def _find_file_url(self, detail_url: str) -> str | None:
+        """Follow the lex.uz link on the CBU detail page and render the actual law text."""
         try:
-            html  = self._fetch_html(detail_url)
-            soup  = BeautifulSoup(html, "lxml")
-            for ext in (".pdf", ".docx", ".doc"):
-                link = soup.find("a", href=re.compile(rf"\.{ext[1:]}$", re.IGNORECASE))
-                if link:
-                    return urljoin(BASE_URL, link["href"])
-        except Exception:
-            pass
+            detail_html = self._fetch_html(doc.source_url)
+        except Exception as exc:
+            logger.error("[cbu] failed to fetch detail page %s: %s", doc.source_url, exc)
+            return b""
+
+        # Stash registry metadata for _save_extra
+        doc.extra.update(self._parse_meta(detail_html))
+
+        lex_url = self._extract_lex_url(detail_html)
+        if not lex_url:
+            logger.warning("[cbu] no lex.uz link on %s — falling back to detail HTML", doc.source_url)
+            return detail_html.encode("utf-8")
+
+        doc.extra["lex_url"] = lex_url
+
+        # Make sure Playwright has a clean lex.uz session before we navigate to the doc.
+        self._playwright_warm_up("https://lex.uz/ru/")
+        try:
+            content = self._playwright_fetch(lex_url, settle_ms=2_000, timeout_ms=45_000)
+            if len(content) < 5_000:
+                logger.warning("[cbu] lex.uz returned %d bytes for %s — using detail HTML",
+                               len(content), doc.doc_id)
+                return detail_html.encode("utf-8")
+            return content
+        except Exception as exc:
+            logger.error("[cbu] playwright fetch %s failed: %s", lex_url, exc)
+            return detail_html.encode("utf-8")
+
+    def _extract_lex_url(self, detail_html: str) -> Optional[str]:
+        soup = BeautifulSoup(detail_html, "lxml")
+        for a in soup.find_all("a", href=True):
+            m = LEX_HREF_RE.search(a["href"])
+            if m:
+                return f"https://lex.uz/ru/docs/{m.group(1)}"
         return None
 
+    def _parse_meta(self, detail_html: str) -> dict:
+        """Extract registry metadata (CB & MoJ numbers and dates) from the CBU detail page."""
+        text = BeautifulSoup(detail_html, "lxml").get_text(" ", strip=True)
+        out: dict = {}
+        for label, key in [
+            (r"№ в ЦБ",   "cbu_doc_number"),
+            (r"№ в МЮ",   "moj_doc_number"),
+            (r"Дата в ЦБ","cbu_date"),
+            (r"Дата в МЮ","moj_date"),
+        ]:
+            m = re.search(rf"{label}:\s*([^\s][^\n]*?)(?=\s+(?:№|Дата|lex\.uz|Поделиться|Назад)|$)",
+                          text)
+            if m:
+                out[key] = m.group(1).strip()
+        return out
+
     def _save_extra(self, doc: DocMeta) -> None:
-        cat_code = doc.doc_id.split("-")[1] if "-" in doc.doc_id else ""
         with self.conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO cbu.normative_acts (doc_id, cbu_category, title_ru, detail_url)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO cbu.normative_acts
+                    (doc_id, cbu_category, cbu_doc_number, title_ru, detail_url)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT DO NOTHING
                 """,
-                (doc.doc_id, cat_code, doc.name, doc.source_url),
+                (
+                    doc.doc_id,
+                    doc.extra.get("cbu_category", ""),
+                    doc.extra.get("cbu_doc_number"),
+                    doc.name,
+                    doc.source_url,
+                ),
             )
 
     def _fetch_html(self, url: str) -> str:
@@ -157,15 +211,8 @@ class CBUWorker(BaseWorker):
             r.raise_for_status()
             return r.text
 
-    def _fetch_bytes(self, url: str) -> bytes:
-        with httpx.Client(headers=config.HTTP_HEADERS, timeout=config.HTTP_TIMEOUT,
-                          follow_redirects=True) as client:
-            r = client.get(url)
-            r.raise_for_status()
-            return r.content
-
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    CBUWorker().run_loop(interval_hours=config.CBU_INTERVAL_HOURS)
+    CBUWorker().run_once()

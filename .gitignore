@@ -2,3 +2,4 @@
 workers/.env
 workers/__pycache__/
 workers/workers/__pycache__/
+workers/.venv/
