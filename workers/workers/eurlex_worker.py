@@ -2,21 +2,20 @@
 EUR-Lex Worker — European Union Regulations
 https://eur-lex.europa.eu/
 
-Monitors consolidated versions of key EU fintech regulations.
-Uses known CELEX numbers — no scraping needed, stable URLs.
+Discovers fintech-relevant EU regulations via the search API,
+then downloads the HTML content using Playwright (bypasses AWS WAF
+that blocks direct httpx requests from datacenter IPs).
 Publishes to Kafka topic: reg.eurlex
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import os
-from dataclasses import dataclass
 from datetime import date
-from typing import List, Optional
-
-import httpx
+from typing import List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from base_worker import BaseWorker, DocMeta
@@ -26,100 +25,36 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://eur-lex.europa.eu"
 
-
-@dataclass
-class EuRegulation:
-    code:           str         # short code: GDPR, PSD2, etc.
-    celex:          str         # EUR-Lex CELEX number
-    official_ref:   str         # e.g. "EU 2016/679"
-    name:           str
-    category:       str
-    language:       str = "en"  # EUR-Lex lang code
-
-
-# ── Catalogue of EU regulations relevant to fintech ─────────────────────────
-EU_REGULATIONS: List[EuRegulation] = [
-    # ── Data Protection ──────────────────────────────────────────────────────
-    EuRegulation(
-        code="GDPR",          celex="32016R0679",   official_ref="EU 2016/679",
-        name="General Data Protection Regulation (GDPR)",
-        category="data_protection",
-    ),
-    # ── Payments ─────────────────────────────────────────────────────────────
-    EuRegulation(
-        code="PSD2",          celex="32015L2366",   official_ref="EU 2015/2366",
-        name="Payment Services Directive 2 (PSD2)",
-        category="payments",
-    ),
-    EuRegulation(
-        code="PSD3",          celex="32024L2853",   official_ref="EU 2024/2853",
-        name="Payment Services Directive 3 (PSD3)",
-        category="payments",
-    ),
-    EuRegulation(
-        code="SEPA_REG",      celex="32012R0260",   official_ref="EU 260/2012",
-        name="SEPA Regulation (credit transfers and direct debits)",
-        category="payments",
-    ),
-    # ── AML/CFT ──────────────────────────────────────────────────────────────
-    EuRegulation(
-        code="AMLD5",         celex="32018L0843",   official_ref="EU 2018/843",
-        name="5th Anti-Money Laundering Directive (AMLD5)",
-        category="aml_cft",
-    ),
-    EuRegulation(
-        code="AMLD6",         celex="32018L1673",   official_ref="EU 2018/1673",
-        name="6th Anti-Money Laundering Directive (AMLD6)",
-        category="aml_cft",
-    ),
-    EuRegulation(
-        code="TFR",           celex="32023R1113",   official_ref="EU 2023/1113",
-        name="Transfer of Funds Regulation — wire transfer traceability",
-        category="aml_cft",
-    ),
-    # ── Crypto ───────────────────────────────────────────────────────────────
-    EuRegulation(
-        code="MICA",          celex="32023R1114",   official_ref="EU 2023/1114",
-        name="Markets in Crypto-Assets Regulation (MiCA)",
-        category="crypto",
-    ),
-    # ── Cybersecurity / Operational Resilience ───────────────────────────────
-    EuRegulation(
-        code="DORA",          celex="32022R2554",   official_ref="EU 2022/2554",
-        name="Digital Operational Resilience Act (DORA)",
-        category="cybersecurity",
-    ),
-    EuRegulation(
-        code="NIS2",          celex="32022L2555",   official_ref="EU 2022/2555",
-        name="Network and Information Systems Directive 2 (NIS2)",
-        category="cybersecurity",
-    ),
-    # ── AI & Algorithmic Decisions ────────────────────────────────────────────
-    EuRegulation(
-        code="AI_ACT",        celex="32024R1689",   official_ref="EU 2024/1689",
-        name="EU Artificial Intelligence Act",
-        category="ai_scoring",
-    ),
-    # ── Consumer Protection ───────────────────────────────────────────────────
-    EuRegulation(
-        code="CCD2",          celex="32023L2225",   official_ref="EU 2023/2225",
-        name="Consumer Credit Directive 2 (CCD2)",
-        category="consumer_protection",
-    ),
-    # ── eIDAS / Digital Identity ──────────────────────────────────────────────
-    EuRegulation(
-        code="EIDAS2",        celex="32024R1183",   official_ref="EU 2024/1183",
-        name="eIDAS 2 — European Digital Identity Framework",
-        category="kyc",
-    ),
+# Fintech search queries → category mapping
+FINTECH_QUERIES: list[tuple[str, str]] = [
+    ("payment services directive",          "payments"),
+    ("electronic money institution",        "payments"),
+    ("SEPA credit transfer",                "payments"),
+    ("anti-money laundering directive",     "aml_cft"),
+    ("transfer of funds regulation",        "aml_cft"),
+    ("crypto-assets regulation",            "crypto"),
+    ("markets in crypto",                   "crypto"),
+    ("digital operational resilience",      "cybersecurity"),
+    ("network information security",        "cybersecurity"),
+    ("general data protection regulation",  "data_protection"),
+    ("artificial intelligence act",         "ai_scoring"),
+    ("consumer credit directive",           "consumer_protection"),
+    ("digital identity eIDAS",              "kyc"),
+    ("banking regulation capital",          "licensing"),
+    ("open banking financial data",         "payments"),
 ]
 
 
-def _pdf_url(celex: str, lang: str = "EN") -> str:
-    return f"{BASE_URL}/legal-content/{lang}/TXT/PDF/?uri=CELEX:{celex}"
+def _pdf_url(celex: str) -> str:
+    return f"{BASE_URL}/legal-content/EN/TXT/PDF/?uri=CELEX:{celex}"
 
-def _html_url(celex: str, lang: str = "EN") -> str:
-    return f"{BASE_URL}/legal-content/{lang}/TXT/HTML/?uri=CELEX:{celex}"
+def _html_url(celex: str) -> str:
+    return f"{BASE_URL}/legal-content/EN/TXT/HTML/?uri=CELEX:{celex}"
+
+def _search_url(query: str, page: int = 1) -> str:
+    q = query.replace(" ", "+")
+    return (f"{BASE_URL}/search.html?text={q}&lang=en&type=quick&scope=EURLEX"
+            f"&DB_TYPE_OF_ACT=directive,regulation&page={page}")
 
 
 class EurLexWorker(BaseWorker):
@@ -128,48 +63,151 @@ class EurLexWorker(BaseWorker):
     s3_prefix   = "eurlex"
 
     def discover(self) -> List[DocMeta]:
-        docs = []
-        for reg in EU_REGULATIONS:
-            doc_id = f"eurlex-{reg.celex}"
-            docs.append(DocMeta(
-                doc_id     = doc_id,
-                name       = reg.name,
-                source_url = _pdf_url(reg.celex, reg.language.upper()),
-                source_id  = self.source_id,
-                category   = reg.category,
-                language   = reg.language,
-                extra      = {
-                    "celex":        reg.celex,
-                    "code":         reg.code,
-                    "official_ref": reg.official_ref,
-                },
-            ))
-        logger.info("[eurlex] %d regulations to check", len(docs))
+        from playwright.sync_api import sync_playwright
+        from bs4 import BeautifulSoup
+
+        seen_celex: set[str] = set()
+        docs: List[DocMeta] = []
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(
+                    user_agent=config.HTTP_HEADERS.get("User-Agent", "Mozilla/5.0"),
+                    locale="en-US",
+                )
+                page = context.new_page()
+
+                for query, category in FINTECH_QUERIES:
+                    logger.info("[eurlex] searching: %r", query)
+                    for pg in range(1, 4):  # up to 3 pages per query = ~30 results
+                        url = _search_url(query, pg)
+                        page.goto(url, wait_until="networkidle", timeout=30_000)
+                        soup = BeautifulSoup(page.content(), "lxml")
+
+                        # Extract unique CELEX numbers from search results
+                        # Skip consolidated versions (CELEX starting with '0')
+                        celex_links = soup.find_all(
+                            "a",
+                            href=re.compile(r"uri=CELEX:[3-9]\w+"),
+                        )
+
+                        found = 0
+                        for link in celex_links:
+                            m = re.search(r"CELEX:([3-9]\w+)", link["href"])
+                            if not m:
+                                continue
+                            celex = m.group(1)
+                            if celex in seen_celex:
+                                continue
+                            seen_celex.add(celex)
+
+                            # Extract title from the AUTO link (full title)
+                            title = link.get_text(strip=True)
+                            if not title or len(title) < 10:
+                                continue
+
+                            doc_id = f"eurlex-{celex}"
+                            docs.append(DocMeta(
+                                doc_id     = doc_id,
+                                name       = title,
+                                source_url = _html_url(celex),
+                                source_id  = self.source_id,
+                                category   = category,
+                                language   = "en",
+                                extra      = {"celex": celex, "query": query},
+                            ))
+                            found += 1
+
+                        logger.debug("[eurlex] query=%r page=%d: %d new CELEX", query, pg, found)
+
+                        # Stop paginating if no new results on this page
+                        if found == 0:
+                            break
+
+                        # Check if there's a next page link
+                        next_link = soup.find("a", href=re.compile(rf"page={pg + 1}"))
+                        if not next_link:
+                            break
+
+            finally:
+                browser.close()
+
+        logger.info("[eurlex] discovered %d unique regulations", len(docs))
         return docs
 
     def download(self, doc: DocMeta) -> bytes:
-        celex = doc.extra["celex"]
-        lang  = doc.language.upper()
+        """Download document content.
 
-        for url in (_pdf_url(celex, lang), _html_url(celex, lang)):
-            try:
-                content = self._fetch_bytes(url)
-                # EUR-Lex returns 202 + AWS-WAF challenge page (~2KB) for datacenter IPs.
-                # Detect by checking Content-Type and minimum size for a real document.
-                is_pdf  = content[:4] == b"%PDF"
-                is_real_html = len(content) > 50_000  # real regulation HTML is large
-                if is_pdf or is_real_html:
-                    logger.debug("[eurlex] downloaded %s (%d bytes)", celex, len(content))
-                    return content
-                logger.warning("[eurlex] WAF/empty response for %s (%d bytes), skipping", celex, len(content))
-            except Exception as exc:
-                logger.warning("[eurlex] fetch failed for %s: %s", celex, exc)
+        Strategy (in order):
+        1. CELLAR API (publications.europa.eu) — EU's programmatic access endpoint,
+           different WAF from eur-lex.europa.eu, designed for machine access.
+        2. EUR-Lex XML format via httpx — less WAF-targeted than HTML.
+        3. EUR-Lex HTML via Playwright — last resort for WAF bypass.
+        """
+        celex = doc.extra.get("celex", "")
 
-        # Both endpoints blocked — return a stub so the doc is registered in DB
-        # and retried on next run (IP may rotate or WAF timeout)
-        logger.error("[eurlex] could not download %s (WAF blocked) — storing stub", celex)
-        stub = f"EUR-Lex document {celex} — {doc.name}\nBlocked by WAF, will retry.\n".encode()
-        return stub
+        content = self._fetch_cellar(celex)
+        if len(content) > 10_000:
+            logger.info("[eurlex] CELLAR OK %s (%d bytes)", celex, len(content))
+            return content
+
+        content = self._fetch_xml(celex)
+        if len(content) > 10_000:
+            logger.info("[eurlex] XML OK %s (%d bytes)", celex, len(content))
+            return content
+
+        content = self._pw_fetch_html(_html_url(celex))
+        if len(content) > 30_000:
+            logger.info("[eurlex] Playwright HTML OK %s (%d bytes)", celex, len(content))
+            return content
+
+        logger.error("[eurlex] all sources failed for %s — storing stub", celex)
+        return f"EUR-Lex {celex} — {doc.name}\nBlocked or unavailable.\n".encode()
+
+    def _fetch_cellar(self, celex: str) -> bytes:
+        """Fetch via CELLAR API (publications.europa.eu) — EU's official machine-access endpoint."""
+        import httpx
+        url = f"https://publications.europa.eu/resource/celex/{celex}"
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/121.0.0.0 Safari/537.36"
+            ),
+        }
+        try:
+            with httpx.Client(headers=headers, timeout=60, follow_redirects=True) as client:
+                r = client.get(url)
+                if r.status_code == 200:
+                    return r.content
+        except Exception as exc:
+            logger.debug("[eurlex] CELLAR failed for %s: %s", celex, exc)
+        return b""
+
+    def _fetch_xml(self, celex: str) -> bytes:
+        """Fetch EUR-Lex XML format via httpx (less WAF-targeted than HTML)."""
+        import httpx
+        url = f"https://eur-lex.europa.eu/legal-content/EN/TXT/XML/?uri=CELEX:{celex}"
+        headers = {
+            "Accept": "application/xml,text/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/121.0.0.0 Safari/537.36"
+            ),
+        }
+        try:
+            with httpx.Client(headers=headers, timeout=60, follow_redirects=True) as client:
+                r = client.get(url)
+                if r.status_code == 200 and len(r.content) > 10_000:
+                    return r.content
+        except Exception as exc:
+            logger.debug("[eurlex] XML fetch failed for %s: %s", celex, exc)
+        return b""
 
     def _save_extra(self, doc: DocMeta) -> None:
         with self.conn.cursor() as cur:
@@ -186,20 +224,36 @@ class EurLexWorker(BaseWorker):
                 (
                     doc.doc_id,
                     doc.extra.get("celex"),
-                    doc.extra.get("code"),
+                    doc.extra.get("celex"),
                     doc.name,
-                    doc.extra.get("official_ref"),
+                    None,
                     date.today(),
-                    doc.source_url,
+                    _pdf_url(doc.extra.get("celex", "")),
                 ),
             )
 
-    def _fetch_bytes(self, url: str) -> bytes:
-        with httpx.Client(headers=config.HTTP_HEADERS, timeout=config.HTTP_TIMEOUT,
-                          follow_redirects=True) as client:
-            r = client.get(url)
-            r.raise_for_status()
-            return r.content
+    def _pw_fetch_html(self, url: str) -> bytes:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/121.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-US",
+                    viewport={"width": 1280, "height": 720},
+                )
+                page = context.new_page()
+                # Warm up: visit homepage first so WAF sees a session with cookies + referrer
+                page.goto(BASE_URL, wait_until="domcontentloaded", timeout=20_000)
+                page.wait_for_timeout(1_000)
+                page.goto(url, wait_until="networkidle", timeout=60_000)
+                return page.content().encode("utf-8")
+            finally:
+                browser.close()
 
 
 if __name__ == "__main__":

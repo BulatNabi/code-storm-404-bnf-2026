@@ -26,7 +26,6 @@ import config
 from workers.cbu_worker    import CBUWorker
 from workers.lex_worker    import LexWorker
 from workers.eurlex_worker import EurLexWorker
-from workers.fatf_worker   import FatfWorker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,7 +37,6 @@ WORKERS = {
     "cbu":    (CBUWorker,    config.CBU_INTERVAL_HOURS),
     "lex":    (LexWorker,    config.LEX_INTERVAL_HOURS),
     "eurlex": (EurLexWorker, config.EURLEX_INTERVAL_HOURS),
-    "fatf":   (FatfWorker,   config.FATF_INTERVAL_HOURS),
 }
 
 
