@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import AuthGuard from '@/components/AuthGuard';
-import { apiGetProject, apiUpdateProject, apiDeleteProject } from '@/lib/api';
+import { apiGetProject, apiUpdateProject, apiDeleteProject, apiAnalyzeFeature } from '@/lib/api';
 import { useLang } from '@/lib/lang-context';
 
 interface Project { id: string; name: string; description?: string; created_at?: string; }
@@ -100,26 +100,38 @@ function ProjectDetailContent() {
     setInputText(''); setAttachedFiles([]); setIsStreaming(true);
     setMessages(prev => [...prev, { role: 'agent', content: '', streaming: true }]);
     try {
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(`http://45.130.127.181:8000/api/projects/${projectId}/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ text: text || null, files: filesBase64 || null }),
-      });
-      if (!response.ok) { const errData = await response.json().catch(() => ({})); throw new Error(errData?.detail || `Error ${response.status}`); }
-      const reader = response.body!.getReader();
-      const decoder = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-        for (const line of lines) {
-          const data = line.startsWith('data: ') ? line.slice(6) : (!line.startsWith(':') && line.trim() ? line : null);
-          if (!data || data === '[DONE]') continue;
-          setMessages(prev => { const u = [...prev]; const l = u[u.length - 1]; if (l.role === 'agent') u[u.length - 1] = { ...l, content: l.content + data }; return u; });
+      // Synchronous analyze — backend POST /api/projects/{id}/analyze is
+      // multipart Form and returns the full {analysis_id, dashboard} once
+      // the agent finishes (~10-25s on gpt-4o-mini).
+      const data = await apiAnalyzeFeature(projectId, text);
+      const dash = data?.dashboard || {};
+      const lines: string[] = [];
+      if (dash.zones?.length) {
+        lines.push('### Затронутые области');
+        for (const z of dash.zones) {
+          lines.push(`• **${z.label || z.id}** — severity: ${z.severity}`);
         }
       }
+      if (dash.risks?.length) {
+        lines.push('\n### Риски');
+        for (const r of dash.risks) {
+          lines.push(`• [${r.severity}] ${r.explanation}`);
+          if (r.article) lines.push(`  📄 ${r.article}`);
+        }
+      }
+      if (dash.checklist?.length) {
+        lines.push('\n### Чеклист');
+        for (const grp of dash.checklist) {
+          lines.push(`**${grp.role}:**`);
+          for (const item of grp.items || []) lines.push(`- [ ] ${item}`);
+        }
+      }
+      if (dash.documents?.length) {
+        lines.push('\n### Документы к обновлению');
+        for (const d of dash.documents) lines.push(`• ${d}`);
+      }
+      const formatted = lines.join('\n') || JSON.stringify(data, null, 2);
+      setMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: 'agent', content: formatted, streaming: false }; return u; });
     } catch (err: any) {
       setMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: 'agent', content: err?.message || t('project_detail.chat_error_default'), error: true, streaming: false }; return u; });
     } finally {
