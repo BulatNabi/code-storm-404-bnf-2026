@@ -14,6 +14,8 @@ Frontend. Принятые архитектурные решения и tradeoff
 Существующие смежные доки:
 - [`docs/AGENTS.md`](AGENTS.md) — общая структура репозитория и
   соглашения по микросервисам.
+- [`docs/agent-tools.md`](agent-tools.md) — готовые `@tool`-функции для
+  ai-core (подключение к ES, hybrid поиск, get_document, verify_quote).
 - [`workers/README.md`](../workers/README.md) — инструкции по запуску
   ETL.
 - [`workers/docs/architecture.md`](../workers/docs/architecture.md) —
