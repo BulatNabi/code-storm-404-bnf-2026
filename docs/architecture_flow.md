@@ -110,24 +110,54 @@
               ▼
         Backend:
         ├─→ Сохраняет результат в SQLite (analyses.result_json)
-        ├─→ Стримит dashboard пользователю через SSE
+        ├─→ Возвращает фронту полный JSON: { analysis_id, dashboard }
         └─→ Если анализ привязан к Jira-таске (jira_issue_key заполнен):
                 POST /rest/api/3/issue/{jira_issue_key}/comment
                 body: summary из ответа AI
                 → комментарий появляется прямо в таске в Jira
 ```
 
+> **Без SSE.** AI-сервис возвращает полный JSON за один ответ — стриминг только добавлял бы искусственную задержку. Фронт делает обычный POST и ждёт `200 application/json`.
+
 ---
 
 ### 4. Получение результата
-Фронт получает SSE-поток и отображает блоки по мере поступления:
+
+Фронт получает обычный JSON-ответ:
+```json
+{
+    "analysis_id": "uuid",
+    "dashboard": {
+        "zones":     [...],
+        "risks":     [...],
+        "checklist": [...],
+        "documents": [...]
+    }
+}
 ```
-event: zones      → теги регуляторных зон
-event: risks      → карточки рисков
-event: checklist  → чеклист по ролям
-event: documents  → список документов
-event: done       → { analysis_id }
+После получения рендерит все блоки сразу.
+
+---
+
+### 5. История диалога (существующий проект)
+
+Когда пользователь открывает уже существующий проект — фронт загружает историю всех анализов:
+
 ```
+GET /api/projects/{project_id}/history
+→ [{ id, text_preview, zones, created_at }, ...]   # список запросов, новые сверху
+
+GET /api/projects/{project_id}/history/{analysis_id}
+→ { id, text, dashboard, created_at }               # полный результат конкретного анализа
+```
+
+**Что хранится в БД:**
+- Каждый вызов `/analyze` создаёт запись в таблице `analyses`
+- Поля: `id`, `project_id`, `text` (запрос пользователя), `result_json` (полный ответ AI), `jira_issue_key`, `created_at`
+- Фронт отображает историю как список карточек; клик на карточку → полный результат
+- Кнопка «Новый запрос» в том же проекте → ещё одна запись в `analyses`
+
+**История уже реализована в бекенде** — эндпоинты существуют, данные сохраняются.
 
 ---
 
@@ -173,18 +203,50 @@ created_at      DATETIME
 
 ## Kafka
 
+**Инфраструктура:**
+- Bootstrap (с хоста / внешние контейнеры): `138.124.54.72:9094`
+- Bootstrap (контейнеры в той же Docker-сети): `kafka:9092`
+- Backend использует `138.124.54.72:9094` — он в отдельной сети `fintech-radar-net`
+- Env-переменная: `KAFKA_BOOTSTRAP_SERVERS`
+
+**Реализация в бекенде:** `backend/app/kafka_producer.py`
+- Продюсер стартует вместе с приложением через FastAPI `lifespan`
+- Если Kafka недоступна при старте — приложение всё равно поднимается, продюсер `None`
+- Все ошибки публикации логируются как warning, запрос пользователя не падает
+
+---
+
 **Topic: `file-vectorization`**
 
-Продюсер: Backend (при создании проекта с файлами)
-Консьюмер: AI-воркер (векторизует файлы и кладёт в векторную БД)
+Продюсер: Backend — при создании проекта с файлами (`POST /api/projects`)  
+Консьюмер: AI-воркер — векторизует файлы и кладёт чанки в Qdrant
+
+Событие публикуется **после** `db.commit()` — к этому моменту файлы уже в S3 и в БД.
 
 ```json
 {
     "project_id": "uuid",
-    "file_ids": ["uuid1", "uuid2"],
-    "s3_keys": ["fintech-radar/projects/uuid/spec.pdf"]
+    "file_ids":   ["uuid1", "uuid2"],
+    "s3_keys":    ["fintech-radar/projects/uuid/spec.pdf"]
 }
 ```
+
+**Поток:**
+```
+POST /api/projects (+ files)
+  → валидация файлов (PDF/DOCX, ≤5 штук, ≤10МБ каждый)
+  → S3: PUT fintech-radar/projects/{project_id}/{filename}
+  → SQLite: INSERT project_files (id, project_id, s3_key, ...)
+  → db.commit()
+  → Kafka: publish "file-vectorization" { project_id, file_ids, s3_keys }
+                        ↓
+              AI-воркер читает событие
+              → скачивает файлы из S3 по s3_keys
+              → векторизует, кладёт в Qdrant
+              → (опционально) помечает project_files.vectorized = true
+```
+
+**Что происходит без файлов:** событие в Kafka не публикуется, проект создаётся как обычно.
 
 ---
 
@@ -237,19 +299,3 @@ Content-Type: application/json
 }
 ```
 
----
-
-## Что нужно изменить в беке (относительно текущей реализации)
-
-| Что | Текущее состояние | Нужно |
-|---|---|---|
-| Файлы при создании проекта | Файлы прикрепляются к анализу | Перенести в `POST /api/projects` |
-| Таблица `project_files` | Нет | Создать |
-| Таблица `analysis_files` | Есть | Убрать |
-| Поле `jira_board_id` в `projects` | Нет | Добавить |
-| Поле `jira_issue_key` в `analyses` | Нет | Добавить |
-| Kafka продюсер | Нет | Добавить при создании проекта с файлами |
-| Вызов AI-сервиса | Stub | Реальный HTTP-запрос с контрактом выше |
-| Jira: список досок | Нет (есть список тасок) | `GET /api/integrations/jira/boards` |
-| Jira: список тасок доски | Общий список всех тасок | `GET /api/integrations/jira/boards/{board_id}/issues` |
-| Jira: отправка summary | Нет | После AI → `POST comment` к `jira_issue_key` |

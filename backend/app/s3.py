@@ -6,8 +6,8 @@ S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "")
 S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY", "")
 S3_SECRET_KEY = os.getenv("S3_SECRET_KEY", "")
 S3_BUCKET = os.getenv("S3_BUCKET", "")
-S3_PREFIX = "fintech-radar/analyses"  # подпапка внутри общего бакета
-PRESIGNED_URL_TTL = 3600  # секунды
+S3_PREFIX = "fintech-radar/projects"
+PRESIGNED_URL_TTL = 3600
 
 
 def get_client():
@@ -20,9 +20,9 @@ def get_client():
     )
 
 
-def upload_file(file_bytes: bytes, analysis_id: str, filename: str) -> tuple[str, int]:
+def upload_file(file_bytes: bytes, project_id: str, filename: str) -> tuple[str, int]:
     """Загружает файл в S3. Возвращает (s3_key, size)."""
-    key = f"{S3_PREFIX}/{analysis_id}/{filename}"
+    key = f"{S3_PREFIX}/{project_id}/{filename}"
     client = get_client()
     client.put_object(
         Bucket=S3_BUCKET,
@@ -33,7 +33,6 @@ def upload_file(file_bytes: bytes, analysis_id: str, filename: str) -> tuple[str
 
 
 def get_presigned_url(s3_key: str) -> str:
-    """Генерирует временную ссылку на файл (TTL 1 час)."""
     client = get_client()
     return client.generate_presigned_url(
         "get_object",

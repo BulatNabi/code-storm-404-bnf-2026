@@ -8,3 +8,4 @@ httpx
 sqlalchemy
 email-validator
 boto3
+aiokafka

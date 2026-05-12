@@ -21,28 +21,22 @@ class ChecklistGroup(BaseModel):
     items: List[str]
 
 
-class FileInfo(BaseModel):
-    name: str
-    size: int
-    url: Optional[str] = None  # presigned S3 URL, генерируется при отдаче
-
-
-class AnalysisOut(BaseModel):
-    id: str
-    project_id: str
-    text: str
-    files: List[FileInfo]
+class Dashboard(BaseModel):
     zones: List[Zone]
     risks: List[Risk]
     checklist: List[ChecklistGroup]
     documents: List[str]
-    created_at: str
+
+
+class AnalyzeResponse(BaseModel):
+    analysis_id: str
+    dashboard: Dashboard
 
 
 class AnalysisHistoryItem(BaseModel):
     id: str
     text_preview: str
-    files: List[FileInfo]
+    jira_issue_key: Optional[str]
     zones: List[Zone]
     created_at: str
 
@@ -50,3 +44,12 @@ class AnalysisHistoryItem(BaseModel):
 class AnalysisHistoryResponse(BaseModel):
     items: List[AnalysisHistoryItem]
     total: int
+
+
+class AnalysisOut(BaseModel):
+    id: str
+    project_id: str
+    text: str
+    jira_issue_key: Optional[str]
+    dashboard: Dashboard
+    created_at: str

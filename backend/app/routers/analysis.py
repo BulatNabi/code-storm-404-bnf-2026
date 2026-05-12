@@ -1,25 +1,22 @@
 import json
-import asyncio
+import os
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
-from fastapi.responses import StreamingResponse
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Form, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import User, Project, Analysis, AnalysisFile
-from app.schemas.analysis import AnalysisOut, AnalysisHistoryResponse, FileInfo
-from app import s3
+from app.models import User, Project, Analysis
+from app.schemas.analysis import AnalyzeResponse, AnalysisOut, AnalysisHistoryResponse, Dashboard
 
 router = APIRouter(prefix="/projects", tags=["Analysis"])
 
-ALLOWED_MIME_TYPES = {"application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 МБ
-MAX_FILES = 5
+AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://fintech-radar-ai:8001")
 
-# Stub AI response — заменится реальным вызовом AI-сервиса
-_STUB_RESULT = {
+_STUB_DASHBOARD = {
     "zones": [
         {"id": "gdpr", "label": "GDPR", "severity": "high"},
         {"id": "psd2", "label": "PSD2/PSD3", "severity": "medium"},
@@ -56,111 +53,53 @@ def _get_project_or_404(project_id: str, user_id: str, db: Session) -> Project:
     return project
 
 
-def _file_infos(analysis: Analysis) -> List[FileInfo]:
-    result = []
-    for f in analysis.files:
-        try:
-            url = s3.get_presigned_url(f.s3_key)
-        except Exception:
-            url = None
-        result.append(FileInfo(name=f.filename, size=f.size, url=url))
-    return result
+async def _call_ai(project: Project, feature_text: str) -> dict:
+    payload = {
+        "project_id": project.id,
+        "project_name": project.name,
+        "project_description": project.description or "",
+        "feature_text": feature_text,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(f"{AI_SERVICE_URL}/analyze", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception:
+        # AI-сервис недоступен — возвращаем стаб чтобы пайплайн не ломался
+        return {"dashboard": _STUB_DASHBOARD, "summary": None}
 
 
-def _analysis_out(a: Analysis) -> AnalysisOut:
-    result = json.loads(a.result_json) if a.result_json else {}
-    return AnalysisOut(
-        id=a.id,
-        project_id=a.project_id,
-        text=a.text,
-        files=_file_infos(a),
-        zones=result.get("zones", []),
-        risks=result.get("risks", []),
-        checklist=result.get("checklist", []),
-        documents=result.get("documents", []),
-        created_at=a.created_at.isoformat(),
-    )
-
-
-@router.post("/{project_id}/analyze",
-             summary="Запустить анализ фичи (SSE-поток)",
-             responses={200: {"content": {"text/event-stream": {}}}})
+@router.post("/{project_id}/analyze", response_model=AnalyzeResponse,
+             summary="Запустить анализ фичи")
 async def analyze(
     project_id: str,
-    text: Optional[str] = Form(None, description="User story или свободный текст"),
-    files: Optional[List[UploadFile]] = File(None, description="PDF или DOCX, до 5 файлов по 10 МБ"),
+    text: str = Form(..., description="User story или свободный текст"),
+    jira_issue_key: Optional[str] = Form(None, description="Ключ Jira-таски (BANK-42)"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not text and not files:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            detail={"code": "EMPTY_INPUT", "message": "Нет ни текста, ни файлов"})
+    project = _get_project_or_404(project_id, current_user.id, db)
 
-    _get_project_or_404(project_id, current_user.id, db)
+    ai_response = await _call_ai(project, text)
+    dashboard = ai_response.get("dashboard", _STUB_DASHBOARD)
+    summary = ai_response.get("summary")
 
-    # Валидация файлов
-    if files:
-        if len(files) > MAX_FILES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail={"code": "TOO_MANY_FILES", "message": f"Максимум {MAX_FILES} файлов"})
-        for f in files:
-            if f.content_type not in ALLOWED_MIME_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                    detail={"code": "UNSUPPORTED_FORMAT", "message": f"{f.filename}: только PDF и DOCX"})
+    result_json = json.dumps({"dashboard": dashboard, "summary": summary}, ensure_ascii=False)
 
-    # Создаём запись анализа
     analysis = Analysis(
         project_id=project_id,
-        text=text or "",
-        result_json=json.dumps(_STUB_RESULT, ensure_ascii=False),
+        text=text,
+        jira_issue_key=jira_issue_key,
+        result_json=result_json,
     )
     db.add(analysis)
-    db.flush()  # получаем analysis.id до commit
-
-    # Загружаем файлы в S3
-    uploaded: List[AnalysisFile] = []
-    if files:
-        for upload in files:
-            file_bytes = await upload.read()
-            if len(file_bytes) > MAX_FILE_SIZE:
-                db.rollback()
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                    detail={"code": "FILE_TOO_LARGE", "message": f"{upload.filename}: превышает 10 МБ"})
-            try:
-                key, size = s3.upload_file(file_bytes, analysis.id, upload.filename)
-            except Exception as e:
-                db.rollback()
-                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                    detail={"code": "S3_UNAVAILABLE", "message": f"Не удалось загрузить файл: {e}"})
-
-            af = AnalysisFile(
-                analysis_id=analysis.id,
-                filename=upload.filename,
-                s3_key=key,
-                size=size,
-                mime_type=upload.content_type,
-            )
-            db.add(af)
-            uploaded.append(af)
-
     db.commit()
     db.refresh(analysis)
 
-    analysis_id = analysis.id
+    # Если анализ привязан к Jira-таске — постим комментарий (реализуется в следующем шаге)
 
-    async def sse_stream():
-        events = [
-            ("zones",     {"zones": _STUB_RESULT["zones"]}),
-            ("risks",     {"risks": _STUB_RESULT["risks"]}),
-            ("checklist", {"checklist": _STUB_RESULT["checklist"]}),
-            ("documents", {"documents": _STUB_RESULT["documents"]}),
-            ("done",      {"analysis_id": analysis_id}),
-        ]
-        for event_name, data in events:
-            await asyncio.sleep(0.4)
-            yield f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(sse_stream(), media_type="text/event-stream")
+    return AnalyzeResponse(analysis_id=analysis.id, dashboard=dashboard)
 
 
 @router.get("/{project_id}/history", response_model=AnalysisHistoryResponse,
@@ -187,11 +126,12 @@ def get_history(
     items = []
     for a in analyses:
         result = json.loads(a.result_json) if a.result_json else {}
+        dashboard = result.get("dashboard", {})
         items.append({
             "id": a.id,
             "text_preview": a.text[:120] + ("..." if len(a.text) > 120 else ""),
-            "files": _file_infos(a),
-            "zones": result.get("zones", []),
+            "jira_issue_key": a.jira_issue_key,
+            "zones": dashboard.get("zones", []),
             "created_at": a.created_at.isoformat(),
         })
 
@@ -216,4 +156,14 @@ def get_analysis(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"code": "NOT_FOUND", "message": "Анализ не найден"})
 
-    return _analysis_out(analysis)
+    result = json.loads(analysis.result_json) if analysis.result_json else {}
+    dashboard = result.get("dashboard", {"zones": [], "risks": [], "checklist": [], "documents": []})
+
+    return AnalysisOut(
+        id=analysis.id,
+        project_id=analysis.project_id,
+        text=analysis.text,
+        jira_issue_key=analysis.jira_issue_key,
+        dashboard=dashboard,
+        created_at=analysis.created_at.isoformat(),
+    )
