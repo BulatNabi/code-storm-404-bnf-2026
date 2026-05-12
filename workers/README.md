@@ -1,25 +1,46 @@
 # Regulatory Document Workers
 
-Pipeline that pulls fintech regulatory documents from three sources, stores
-the raw files, converts them to Markdown for downstream RAG, and publishes
-Kafka events at every step.
+End-to-end fintech regulatory-radar pipeline. Pulls regulatory documents
+from three jurisdictions, converts them to Markdown, extracts atomic
+compliance rules with an LLM, and indexes everything into Elasticsearch
+so a downstream LangChain agent can answer "what regulatory risks does
+this product feature touch?"
 
 ```
-                         ┌──────────────┐
-                         │ cbu_worker   │── reg.cbu ────┐
-                         ├──────────────┤               │
-                         │ lex_worker   │── reg.lex ────┼───►  md_converter ──► reg.md
-                         ├──────────────┤               │           │
-                         │ eurlex_worker│── reg.eurlex ─┘           │
-                         └──────┬───────┘                           │
-                                │                                   │
-                                ▼                                   ▼
-                       MinIO `regtech-docs/raw-docs/...`     MinIO `regtech-md/...`
-                       Postgres `public.documents`           Postgres `public.documents_md`
+                                                                                    Kafka
+   ┌──────────────┐    reg.cbu ──┐                                                  topics
+   │ cbu_worker   │              │
+   ├──────────────┤              │      ┌─────────────┐   reg.md   ┌─────────────────┐   reg.rules
+   │ lex_worker   ├── reg.lex ───┼────► │ md_converter│ ─────────► │ rules_extractor │ ──────┐
+   ├──────────────┤              │      │  (docling)  │            │  (LLM, OpenRouter)│     │
+   │ eurlex_worker├── reg.eurlex ┘      └─────────────┘            └─────────────────┘     │
+   └──────────────┘                            │                            │              │
+                                               │                            │              │
+                                               ▼                            ▼              ▼
+       MinIO `regtech-docs/raw-docs/...`  MinIO `regtech-md/...`   Postgres `public.rules`  │
+       Postgres `public.documents`        Postgres `public.documents_md` `public.rule_extractions`
+                                                                                            │
+                                                                                            │  (reg.md + reg.rules)
+                                                                                            ▼
+                                                                                  ┌────────────────────┐
+                                                                                  │   es_indexer       │
+                                                                                  │   (embeddings via  │
+                                                                                  │    OpenRouter)     │
+                                                                                  └─────────┬──────────┘
+                                                                                            ▼
+                                                                                Elasticsearch `regtech-docs`
+                                                                                (full_text BM25 + dense_vector)
+                                                                                            │
+                                                                                            ▼
+                                                                                  LangChain agent (Track 4)
 ```
 
 Every artifact is keyed by `doc_id` so the raw bytes, the converted markdown,
-and the cross-source metadata can be joined in SQL or matched on Kafka events.
+the extracted rules, and the ES index entry can all be joined in SQL or
+matched on Kafka events.
+
+See [`docs/architecture.md`](docs/architecture.md) for the full design, including
+the ES mapping, the dedup model, and how the agent will consume the index.
 
 ---
 
@@ -99,6 +120,8 @@ Auto-created topics, default cluster `localhost:9094` (external listener).
 | `reg.lex` | lex_worker | same |
 | `reg.eurlex` | eurlex_worker | same |
 | `reg.md` | md_converter | `document.md.ready` |
+| `reg.rules` | rules_extractor | `document.rules.ready` |
+| `reg.indexed` | es_indexer | `document.indexed` — published after the doc lands in ES |
 
 Source-topic event payload (`base_worker.DocEvent`):
 
@@ -206,6 +229,76 @@ Skips re-conversion when the raw `file_hash` matches what was already
 converted. Records conversion errors with `status='error'` and
 `error_message` without crashing the consumer.
 
+### `rules_extractor.py`
+
+Kafka consumer (group `rules-extractor-v1`) on `reg.md`. For each event:
+
+1. Downloads the markdown from `regtech-md`.
+2. Runs `rules_generator.RuleGenerator` (LLM-based) — direct strategy for
+   docs under 50K tokens, map-reduce for larger ones.
+3. Validates the JSON rules, assigns `R-<TAG>-NNN` ids, writes them to
+   `public.rules` (replace-all per doc).
+4. Upserts `public.rule_extractions (status, rules_count, strategy, …)`.
+5. Publishes `document.rules.ready` on `reg.rules`.
+
+Runs three extractions in parallel via `ThreadPoolExecutor(3)`; each thread
+has its own DB connection and its own `LLMClient` (the async OpenAI client
+binds to the event loop that first uses it). Filters by `RULES_SOURCES`
+env var — by default Lex.uz is excluded because its MD output still has
+site chrome and a fair number of Uzbek-only stubs.
+
+### `es_indexer.py`
+
+Indexes the full pipeline output into Elasticsearch (`regtech-docs`
+index) for the LangChain agent. One ES document per regulatory document,
+with the extracted rules as a `nested` array.
+
+Modes:
+```bash
+# One-shot: index everything currently in Postgres
+python es_indexer.py --backfill
+python es_indexer.py --backfill --limit 5      # smoke test
+
+# Stream: Kafka consumer on reg.md + reg.rules (default)
+python es_indexer.py
+python es_indexer.py --once                    # drain buffered events and exit
+
+# Destructive: drop + create the index (e.g. after EMBEDDING_DIMS change)
+python es_indexer.py --recreate-index --backfill
+```
+
+Each indexed document carries:
+- `embedding` — a 1536-dim vector over a `summary` field (title plus the
+  concatenated `title + requirement` of every extracted rule, or the first
+  ~8KB of MD when rules haven't been extracted). Embeddings are computed
+  through `openai/text-embedding-3-small` via OpenRouter.
+- `full_text` — the converted Markdown (capped at 200KB) for BM25.
+- `rules` — nested array of `{rule_id, tag, title, requirement,
+  verification_method, severity, positive_examples, negative_examples}`.
+- Flat `tags` and `severities` keyword arrays for cheap facet aggregations
+  without nested aggs.
+
+The indexer is idempotent: the ES `_id` is the `doc_id`, every event
+triggers a full rebuild of that doc's ES entry (cheap re-fetch from
+Postgres + S3 → re-embed → upsert).
+
+After each successful index op the worker publishes a
+`document.indexed` event on `reg.indexed` (toggleable via
+`--no-publish`; on by default in stream mode, off by default in
+`--backfill` so a bootstrap doesn't flood the topic):
+
+```json
+{
+  "event_type":  "document.indexed",
+  "doc_id":      "eurlex-32016R0679",
+  "source":      "eurlex",
+  "es_index":    "regtech-docs",
+  "has_rules":   true,
+  "rules_count": 12,
+  "indexed_at":  "2026-05-12T07:42:11Z"
+}
+```
+
 ---
 
 ## Running
@@ -233,33 +326,76 @@ Required services (run separately or via `docker compose --profile bootstrap up 
 - Kafka at `localhost:9094`
 - Postgres at `localhost:5435` (`regtech` / `regtech_secret`)
 
-### md_converter in Docker
+### One container per worker
 
-The container is intentionally standalone — it reaches host MinIO/Kafka/Postgres
-through `host.docker.internal` so it works alongside whatever you're already
-running.
+Every stage of the pipeline has its own compose service so it can be
+started, stopped and scaled independently. The containers all reach the
+host-side infra (Kafka, MinIO, Postgres) through `host.docker.internal`,
+which makes them work alongside whatever you already have running on the
+host. Elasticsearch is the only stage that lives inside the compose
+network — workers point at it by service name (`elasticsearch:9200`).
+
+| service           | profile      | Dockerfile                | role |
+|-------------------|--------------|---------------------------|---|
+| `postgres`        | `bootstrap`  | image: postgres:16-alpine | only for greenfield; the host already has `regtech_postgres` |
+| `cbu_worker`      | `scrapers`   | `Dockerfile.scraper`      | discover + download from CBU |
+| `lex_worker`      | `scrapers`   | `Dockerfile.scraper`      | discover + download from Lex.uz |
+| `eurlex_worker`   | `scrapers`   | `Dockerfile.scraper`      | discover + download from EUR-Lex |
+| `md_converter`    | (default)    | `Dockerfile.md_converter` | docling: any → Markdown |
+| `rules_extractor` | (default)    | `Dockerfile.worker`       | LLM rule extraction |
+| `elasticsearch`   | (default)    | image: elasticsearch:8.15 | search backend for the agent |
+| `es_indexer`      | (default)    | `Dockerfile.worker`       | embed + bulk-index into ES |
+
+Profiles keep noisy or optional services opt-in. The scraper workers each
+take hours to drain a full classifier and usually you only want one
+running at a time, so they live under `scrapers`. Postgres lives under
+`bootstrap` because most local setups already have `regtech_postgres`
+running on host port 5435.
 
 ```bash
 cd workers
 
-docker compose build md_converter
-docker compose up    -d md_converter
-docker compose logs  -f md_converter
+# Build everything (or just the services you need)
+docker compose build md_converter rules_extractor es_indexer
 
-# Stop / restart
-docker compose stop  md_converter
-docker compose down  md_converter   # also removes the container
+# Start the always-on stack: ES + consumers
+docker compose up -d elasticsearch
+docker compose up -d md_converter rules_extractor es_indexer
+
+# Run a scraper opt-in (one at a time is usually enough)
+docker compose --profile scrapers up -d cbu_worker
+docker compose --profile scrapers up -d lex_worker
+docker compose --profile scrapers up -d eurlex_worker
+
+# Optional bootstrap Postgres (only if you don't already have regtech_postgres)
+docker compose --profile bootstrap up -d postgres
+
+# Logs / ops
+docker compose logs -f es_indexer
+docker compose stop rules_extractor
+docker compose down  # stops + removes containers (volumes persist)
 ```
 
-First boot pulls and warms up the docling model cache (cached on the
-`md_converter_cache` volume across restarts).
+Credentials are read from `workers/.env` (gitignored) via `env_file: .env`
+on each service. The explicit `environment:` block then overrides the
+URLs so containers reach `host.docker.internal` for host-side infra and
+`elasticsearch:9200` for the in-compose ES.
 
-The compose file also defines a `postgres` service under the `bootstrap`
-profile. Use it only if you don't already have `regtech_postgres` running:
+#### First-time ES backfill
+
+After ES is healthy, run the indexer once in backfill mode to populate
+the index with whatever's already in Postgres:
 
 ```bash
-docker compose --profile bootstrap up -d postgres
+# Inside the running container
+docker compose exec es_indexer python es_indexer.py --backfill
+
+# Or, if running natively from the host
+python es_indexer.py --backfill
 ```
+
+Then leave the container in its default stream mode — new docs flowing
+through `reg.md` / `reg.rules` get incrementally indexed.
 
 ---
 
@@ -285,6 +421,17 @@ Defaults are tuned for the local stack.
 | `EURLEX_PAGES_PER_QUERY`  | `5`                          | per-query result pages |
 | `MD_TOPIC`                | `reg.md`                     | output topic for converter |
 | `MD_CONSUMER_GROUP`       | `md-converter`               | Kafka consumer group |
+| `LLM_BASE_URL`            | `https://openrouter.ai/api/v1` | OpenAI-compatible chat endpoint |
+| `LLM_API_KEY`             | (required)                   | OpenRouter / OpenAI key |
+| `LLM_MODEL`               | `google/gemini-3-flash-preview` | rule-extraction model |
+| `RULES_SOURCES`           | (empty = all)                | comma-separated allow-list, e.g. `cbu,eurlex` |
+| `RULES_PARALLELISM`       | `3`                          | concurrent LLM calls in rules_extractor |
+| `RULES_CONSUMER_GROUP`    | `rules-extractor-v1`         | bump to re-process the topic from offset 0 |
+| `ES_URL`                  | `http://localhost:9200`      | Elasticsearch endpoint |
+| `ES_INDEX`                | `regtech-docs`               | target index name |
+| `ES_BULK_SIZE`            | `50`                         | docs per bulk request |
+| `EMBEDDING_MODEL`         | `openai/text-embedding-3-small` | OpenRouter slug for embeddings |
+| `EMBEDDING_DIMS`          | `1536`                       | must match the model — bump → re-create index |
 
 ---
 
@@ -316,4 +463,23 @@ done
 # Tail the latest reg.md events
 docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 --topic reg.md --from-beginning --max-messages 5
+
+# Extracted rules summary
+docker exec regtech_postgres psql -U regtech -d regtech -c "
+  SELECT
+    CASE WHEN doc_id LIKE 'cbu-%'    THEN 'cbu'
+         WHEN doc_id LIKE 'eurlex-%' THEN 'eurlex'
+         WHEN doc_id LIKE 'lex-%'    THEN 'lex' END AS source,
+    COUNT(DISTINCT doc_id) AS docs, COUNT(*) AS rules
+  FROM public.rules GROUP BY 1 ORDER BY rules DESC;"
+
+# Elasticsearch — cluster health + doc count
+curl -s localhost:9200/_cluster/health        | jq
+curl -s 'localhost:9200/regtech-docs/_count'  | jq
+
+# Top tags in the index
+curl -s localhost:9200/regtech-docs/_search -H 'Content-Type: application/json' -d '{
+  "size": 0,
+  "aggs": { "tags": { "terms": { "field": "tags", "size": 15 } } }
+}' | jq '.aggregations.tags.buckets'
 ```

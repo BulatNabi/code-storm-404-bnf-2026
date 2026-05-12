@@ -1,0 +1,19 @@
+# Caches and venv
+**/__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+
+# Local config (each container takes secrets via env)
+.env
+.env.*
+
+# Editor/OS junk
+.DS_Store
+.idea/
+.vscode/
+
+# Logs and tmp
+*.log
+/tmp/

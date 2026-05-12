@@ -1,0 +1,30 @@
+# Image for the three site-scraping workers (cbu/lex/eurlex). Built on
+# the official Playwright Python image so Chromium is pre-installed and
+# all its system deps are already there.
+FROM mcr.microsoft.com/playwright/python:v1.45.0-jammy
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# Light deps only — no docling, no torch. The scrapers don't need them.
+RUN pip install --no-cache-dir \
+        "boto3>=1.34.0" \
+        "kafka-python>=2.0.2" \
+        "psycopg2-binary>=2.9.9" \
+        "httpx>=0.27.0" \
+        "beautifulsoup4>=4.12.0" \
+        "lxml>=5.2.0" \
+        "python-dotenv>=1.0.0" \
+        "schedule>=1.2.1" \
+        "tenacity>=8.2.3" \
+        "playwright>=1.45.0"
+
+COPY config.py base_worker.py run_all.py ./
+COPY workers/ ./workers/
+
+# Each compose service overrides this — `run_all.py --worker cbu`, etc.
+CMD ["python", "run_all.py"]

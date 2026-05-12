@@ -12,3 +12,5 @@ playwright>=1.45.0
 docling>=2.0.0
 # Used by rules_extractor.py — OpenAI-compatible client (works with Yandex Cloud LLM).
 openai>=1.50.0
+# Used by es_indexer.py — Elasticsearch 8.x client.
+elasticsearch>=8.13.0,<9.0.0
