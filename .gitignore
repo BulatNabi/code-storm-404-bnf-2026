@@ -43,6 +43,7 @@ htmlcov/
 
 # === Environment Secrets ===
 .env
+.env*
 .env.local
 *.secret
 workers/.env
@@ -62,7 +63,16 @@ desktop.ini
 
 # === Node / Next.js ===
 node_modules/
+.next/
+/out/
 frontend/.next/
 frontend/out/
 frontend/build/
 frontend/dist/
+
+# === Vercel ===
+.vercel
+
+# === TypeScript ===
+*.tsbuildinfo
+next-env.d.ts
