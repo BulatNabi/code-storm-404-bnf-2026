@@ -133,7 +133,7 @@ export async function apiConnectJira(data: {
   email: string;
   api_token: string;
 }) {
-  const res = await fetch(`${BASE_URL}/api/integrations/jira/connect`, {
+  const res = await fetch(`${BASE_URL}/integrations/jira/connect`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(data),
@@ -143,7 +143,7 @@ export async function apiConnectJira(data: {
 }
 
 export async function apiDisconnectJira() {
-  const res = await fetch(`${BASE_URL}/api/integrations/jira`, {
+  const res = await fetch(`${BASE_URL}/integrations/jira`, {
     method: 'DELETE',
     headers: authHeaders(),
   });
