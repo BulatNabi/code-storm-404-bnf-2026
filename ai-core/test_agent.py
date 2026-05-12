@@ -1,6 +1,7 @@
 import asyncio
 import os
 import json
+import uuid
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -23,13 +24,18 @@ from agents.tools._es import close_es
 async def main():
     agent = build_agent()
     print("=" * 60)
-    print("🏦 RegTech AI Assistant (Interactive Mode)")
+    print("🏦 RegTech AI Assistant (Interactive Mode with Memory)")
     print("=" * 60)
     print("Введите описание фичи для проверки (или 'exit' для выхода).\n")
     
+    # Генерируем уникальный ID для текущей сессии чата
+    session_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": session_id}}
+    print(f"🔗 Session ID (thread_id): {session_id}")
+    
     while True:
         try:
-            feature_desc = input("\n📝 Описание фичи: ")
+            feature_desc = input("\n📝 Описание фичи (или уточняющий вопрос): ")
             if feature_desc.strip().lower() in ('exit', 'quit', 'q'):
                 print("Завершение работы...")
                 break
@@ -37,10 +43,11 @@ async def main():
             if not feature_desc.strip():
                 continue
                 
-            print("\n🔄 Агент анализирует фичу и ищет правила в базе...\n")
+            print("\n🔄 Агент анализирует запрос...\n")
             inputs = {"messages": [("user", feature_desc)]}
             
-            async for event in agent.astream(inputs, stream_mode="values"):
+            # Передаем config с thread_id, чтобы LangGraph подтянул историю сообщений
+            async for event in agent.astream(inputs, config=config, stream_mode="values"):
                 message = event["messages"][-1]
                 # Чтобы не засорять вывод, печатаем только AI сообщения (tool calls) и финальный ответ
                 if message.type == "ai":

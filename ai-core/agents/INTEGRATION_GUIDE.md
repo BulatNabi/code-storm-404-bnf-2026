@@ -22,6 +22,7 @@
 
 ```python
 # agents/main.py
+import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -41,6 +42,7 @@ agent = build_agent()
 
 class FeatureRequest(BaseModel):
     feature_description: str
+    session_id: str = None  # Опциональный ID для поддержания контекста
 
 @app.post("/api/v1/analyze-feature")
 async def analyze_feature(request: FeatureRequest):
@@ -49,8 +51,12 @@ async def analyze_feature(request: FeatureRequest):
     """
     inputs = {"messages": [("user", request.feature_description)]}
     
+    # Генерация или использование переданного session_id для памяти графа
+    session_id = request.session_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": session_id}}
+    
     try:
-        final_state = await agent.ainvoke(inputs)
+        final_state = await agent.ainvoke(inputs, config=config)
         last_message = final_state["messages"][-1].content
         
         # Очистка маркдауна, если LLM его добавила
@@ -59,7 +65,9 @@ async def analyze_feature(request: FeatureRequest):
         elif cleaned.startswith("```"): cleaned = cleaned[3:]
         if cleaned.endswith("```"): cleaned = cleaned[:-3]
         
-        return json.loads(cleaned.strip())
+        response_data = json.loads(cleaned.strip())
+        response_data["session_id"] = session_id  # Возвращаем ID сессии клиенту
+        return response_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 ```
@@ -139,6 +147,7 @@ CMD ["uvicorn", "agents.main:app", "--host", "0.0.0.0", "--port", "8001"]
 {
   "feature_summary": "Интеграция внешнего сервиса push-уведомлений для маркетинговых рассылок.",
   "overall_risk": "critical",
+  "jira_comment_summary": "### 🚨 Compliance Review\n**Риск**: Критический (Critical)\n**Вердикт**: Передача данных внешнему сервису без явного согласия нарушает закон о ПДн.\n\n**To-Do для команды:**\n- [ ] Frontend: Добавить экран с явным чекбоксом согласия на маркетинг.\n- [ ] Backend: Добавить логирование `consent_accepted=true` в БД.",
   "domains": [
     {
       "domain": "personal_data",
