@@ -1,68 +1,56 @@
 # Деплой на сервер
 
-**Сервер:** `root@45.130.127.181` (старый) / `user_bnf@138.124.54.72` (новый)  
-**Папка на сервере:** `/opt/fintech-radar/backend`  
-**Swagger:** `http://138.124.54.72:8000/docs`
+**Сервер:** `user_bnf@138.124.54.72`  
+**Папка на сервере:** `~/fintech-radar/`  
+**Swagger бекенда:** `http://138.124.54.72:8000/docs`
 
-> Каждый микросервис деплоится независимо из своей папки.
+Каждый микросервис деплоится независимо из своей папки со своим `docker-compose.yml`.
 
 ---
 
-## Инфраструктура (уже развёрнута)
+## Инфраструктура (уже развёрнута на сервере)
 
 | Сервис | Адрес |
 |---|---|
-| S3 | `https://s3.twcstorage.ru`, бакет `38af486f-b0e9-4d3f-998a-79f712ebcc7f` |
+| S3 | `https://s3.twcstorage.ru` (облако) |
+| Kafka | `138.124.54.72:9094` (с хоста / внешние контейнеры) |
 | Kafka UI | `http://138.124.54.72:8080` |
-| Kafka (с хоста / внешние контейнеры) | `138.124.54.72:9094` |
-| Kafka (контейнеры в той же Docker-сети) | `kafka:9092` |
+| Qdrant | `138.124.54.72:6335` |
 
 ---
 
-## Первый деплой (backend)
+## Backend — первый деплой
 
-### 1. Создать сеть (один раз на сервере)
+### 1. Создать Docker-сеть (один раз на сервере)
 
 ```bash
-docker network create fintech-radar-net
+ssh user_bnf@138.124.54.72 "docker network create fintech-radar-net"
 ```
 
-> Сеть `external: true` в docker-compose.yml — её надо создать вручную до запуска любого из микросервисов.
+> Все микросервисы проекта подключаются к этой сети. Если сеть уже существует — ошибку проигнорировать.
 
 ### 2. Создать папку на сервере
 
 ```bash
-ssh user_bnf@138.124.54.72 "mkdir -p /opt/fintech-radar/backend"
+ssh user_bnf@138.124.54.72 "mkdir -p ~/fintech-radar/backend"
 ```
 
-### 3. Установить rsync на сервер (если нет)
+### 3. Залить файлы с локальной машины
 
 ```bash
-ssh user_bnf@138.124.54.72 "sudo apt-get install -y rsync"
+rsync -av --progress --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='*.db' --exclude='.git' /Users/username/Documents/Work/CodeStorm/code-storm-404-bnf-2026/backend/ user_bnf@138.124.54.72:~/fintech-radar/backend/
 ```
 
-### 4. Залить файлы с локальной машины
-
-```bash
-rsync -av --progress \
-  --exclude='.venv' \
-  --exclude='__pycache__' \
-  --exclude='*.pyc' \
-  --exclude='*.db' \
-  --exclude='.git' \
-  /Users/username/Documents/Work/CodeStorm/code-storm-404-bnf-2026/backend/ \
-  user_bnf@138.124.54.72:/opt/fintech-radar/backend/
-```
-
-### 5. Создать `.env` на сервере
+### 4. Создать `.env` на сервере
 
 ```bash
 ssh user_bnf@138.124.54.72
 ```
 
 ```bash
-cat > /opt/fintech-radar/backend/.env << 'EOF'
-SECRET_KEY=<сгенерировать: openssl rand -hex 32>
+SECRET=$(openssl rand -hex 32)
+cat > ~/fintech-radar/backend/.env << EOF
+SECRET_KEY=$SECRET
 S3_ENDPOINT_URL=https://s3.twcstorage.ru
 S3_ACCESS_KEY=E2152EKZVNZD701BB8HA
 S3_SECRET_KEY=PZSHfmhV5imwxCORAqc7sLtZAXAdHaDOAre6xQg8
@@ -72,40 +60,49 @@ AI_SERVICE_URL=http://fintech-radar-ai:8001
 EOF
 ```
 
-Сгенерировать SECRET_KEY:
+Проверить:
 ```bash
-SECRET=$(openssl rand -hex 32) && sed -i "s/<сгенерировать: openssl rand -hex 32>/$SECRET/" /opt/fintech-radar/backend/.env
+cat ~/fintech-radar/backend/.env
 ```
 
-### 6. Собрать и запустить
+### 5. Собрать и запустить
 
 ```bash
-cd /opt/fintech-radar/backend && docker-compose up -d --build
+cd ~/fintech-radar/backend && docker-compose up -d --build
 ```
 
-### 7. Проверить
+### 6. Проверить
 
 ```bash
 docker ps | grep fintech-radar-backend
 curl http://localhost:8000/health
 ```
 
+Swagger: **`http://138.124.54.72:8000/docs`**
+
 ---
 
-## Обновление (после изменений в коде)
+## Backend — обновление (после изменений в коде)
 
 ```bash
-rsync -av --progress \
-  --exclude='.venv' \
-  --exclude='__pycache__' \
-  --exclude='*.pyc' \
-  --exclude='*.db' \
-  --exclude='.git' \
-  /Users/username/Documents/Work/CodeStorm/code-storm-404-bnf-2026/backend/ \
-  user_bnf@138.124.54.72:/opt/fintech-radar/backend/
-
-ssh user_bnf@138.124.54.72 "cd /opt/fintech-radar/backend && docker-compose up -d --build"
+rsync -av --progress --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='*.db' --exclude='.git' /Users/username/Documents/Work/CodeStorm/code-storm-404-bnf-2026/backend/ user_bnf@138.124.54.72:~/fintech-radar/backend/
 ```
+
+```bash
+ssh user_bnf@138.124.54.72 "cd ~/fintech-radar/backend && docker-compose up -d --build"
+```
+
+---
+
+## Если нужно пересоздать БД (при изменении схемы)
+
+> ⚠️ Удалит все данные.
+
+```bash
+ssh user_bnf@138.124.54.72 "cd ~/fintech-radar/backend && docker-compose down -v"
+```
+
+Затем снова шаг 5.
 
 ---
 
@@ -113,17 +110,26 @@ ssh user_bnf@138.124.54.72 "cd /opt/fintech-radar/backend && docker-compose up -
 
 ```bash
 # Статус контейнера
-docker ps | grep fintech-radar-backend
+docker ps | grep fintech-radar
 
-# Логи (последние 50 строк)
+# Логи бекенда (последние 50 строк)
 docker logs fintech-radar-backend --tail 50
 
 # Логи в реальном времени
 docker logs fintech-radar-backend -f
 
-# Остановить
-cd /opt/fintech-radar/backend && docker-compose down
-
 # Перезапустить без пересборки
 docker restart fintech-radar-backend
+
+# Остановить
+cd ~/fintech-radar/backend && docker-compose down
 ```
+
+---
+
+## Заметки
+
+- `.env` не коммитится в репозиторий — создаётся на сервере вручную
+- Наша сеть `fintech-radar-net` изолирована и не влияет на другие контейнеры сервера
+- Если AI-сервис ещё не запущен — бекенд работает со стаб-ответом, не падает
+- Если Kafka недоступна при старте — бекенд всё равно поднимается, пишет warning в лог

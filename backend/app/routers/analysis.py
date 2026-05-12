@@ -1,6 +1,9 @@
 import json
+import logging
 import os
 from typing import Optional, List
+
+logger = logging.getLogger(__name__)
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Form, status
@@ -9,8 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import User, Project, Analysis
+from app.models import User, Project, Analysis, JiraBoard
 from app.schemas.analysis import AnalyzeResponse, AnalysisOut, AnalysisHistoryResponse, Dashboard
+from app.services.jira_client import JiraAPIClient
 
 router = APIRouter(prefix="/projects", tags=["Analysis"])
 
@@ -40,6 +44,15 @@ _STUB_DASHBOARD = {
         "Terms of Service → раздел 'Виртуальные карты'",
     ],
 }
+
+
+def _build_jira_comment(summary: dict) -> str:
+    lines = [f"🔍 {summary.get('title', 'Compliance Review')}", "", summary.get('description', ''), ""]
+    checklist = summary.get("checklist", [])
+    if checklist:
+        lines.append("Чеклист:")
+        lines.extend(f"• {item}" for item in checklist)
+    return "\n".join(lines)
 
 
 def _get_project_or_404(project_id: str, user_id: str, db: Session) -> Project:
@@ -101,7 +114,18 @@ async def analyze(
     db.commit()
     db.refresh(analysis)
 
-    # Если анализ привязан к Jira-таске — постим комментарий (реализуется в следующем шаге)
+    if jira_issue_key and project.jira_board_id and summary:
+        board = db.query(JiraBoard).filter(
+            JiraBoard.board_key == project.jira_board_id,
+            JiraBoard.user_id == current_user.id,
+        ).first()
+        if board:
+            try:
+                client = JiraAPIClient(board.domain, board.email, board.api_token)
+                comment = _build_jira_comment(summary)
+                await client.post_comment(jira_issue_key, comment)
+            except Exception as e:
+                logger.warning("Failed to post Jira comment: %s", e)
 
     return AnalyzeResponse(
         analysis_id=analysis.id,

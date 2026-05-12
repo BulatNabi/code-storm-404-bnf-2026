@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
 from app import models  # noqa: F401 — registers all models with Base
 from app import kafka_producer
-from app.routers import auth, projects, analysis, jira
+from app.routers import auth, projects, analysis, jira, internal
 
 
 @asynccontextmanager
@@ -43,6 +43,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
 app.include_router(analysis.router, prefix="/api")
 app.include_router(jira.router, prefix="/api")
+app.include_router(internal.router, prefix="/api")
 
 
 @app.get("/health", tags=["Health"])
