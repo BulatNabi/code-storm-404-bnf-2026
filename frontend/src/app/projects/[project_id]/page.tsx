@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import Navbar from '@/components/Navbar';
 import AuthGuard from '@/components/AuthGuard';
 import {
@@ -200,14 +202,6 @@ function ProjectDetailContent() {
               {project.created_at && <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: 8 }}>{t('project_detail.label_created')}: {new Date(project.created_at).toLocaleDateString()}</p>}
             </div>
 
-            <div className="card" style={{ marginBottom: 32 }}>
-              <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap' }}>
-                <div><div className="form-label" style={{ marginBottom: 4 }}>{t('project_detail.label_id')}</div><code style={{ fontFamily: 'monospace', color: 'var(--accent)', fontSize: '0.875rem' }}>{project.id}</code></div>
-                <div><div className="form-label" style={{ marginBottom: 4 }}>{t('project_detail.label_name')}</div><span>{project.name}</span></div>
-                {project.description && <div><div className="form-label" style={{ marginBottom: 4 }}>{t('project_detail.label_desc')}</div><span style={{ color: 'var(--text-muted)' }}>{project.description}</span></div>}
-              </div>
-            </div>
-
             {/* Chat */}
             <div className="card" style={{ marginBottom: 32, padding: 0, overflow: 'hidden' }}>
               <div style={{ padding: '20px 28px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -252,8 +246,29 @@ function ProjectDetailContent() {
                           {msg.files.map((f, fi) => <span key={fi} style={{ padding: '4px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 100, fontSize: '0.72rem', color: 'var(--text-muted)' }}>📎 {f}</span>)}
                         </div>
                       )}
-                      <div style={{ padding: '12px 16px', borderRadius: msg.role === 'user' ? '16px 4px 16px 16px' : '4px 16px 16px 16px', background: msg.role === 'user' ? 'var(--accent)' : msg.error ? 'var(--danger-dim)' : 'var(--surface2)', border: msg.role === 'agent' ? `1px solid ${msg.error ? 'rgba(255,77,106,0.25)' : 'var(--border)'}` : 'none', color: msg.role === 'user' ? '#fff' : msg.error ? 'var(--danger)' : 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                        {msg.content || (msg.streaming ? '' : '…')}
+                      <div className={msg.role === 'agent' && !msg.error ? 'chat-md' : undefined} style={{ padding: '12px 16px', borderRadius: msg.role === 'user' ? '16px 4px 16px 16px' : '4px 16px 16px 16px', background: msg.role === 'user' ? 'var(--accent)' : msg.error ? 'var(--danger-dim)' : 'var(--surface2)', border: msg.role === 'agent' ? `1px solid ${msg.error ? 'rgba(255,77,106,0.25)' : 'var(--border)'}` : 'none', color: msg.role === 'user' ? '#fff' : msg.error ? 'var(--danger)' : 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7, wordBreak: 'break-word' }}>
+                        {msg.role === 'agent' && msg.content && !msg.error ? (
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              a: ({ node, ...props }) => (
+                                <a {...props} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }} />
+                              ),
+                              ul: ({ node, ...props }) => <ul {...props} style={{ paddingLeft: 22, margin: '6px 0' }} />,
+                              ol: ({ node, ...props }) => <ol {...props} style={{ paddingLeft: 22, margin: '6px 0' }} />,
+                              li: ({ node, ...props }) => <li {...props} style={{ margin: '2px 0' }} />,
+                              h1: ({ node, ...props }) => <h3 {...props} style={{ margin: '12px 0 6px', fontSize: '1.05rem' }} />,
+                              h2: ({ node, ...props }) => <h3 {...props} style={{ margin: '12px 0 6px', fontSize: '1.05rem' }} />,
+                              h3: ({ node, ...props }) => <h3 {...props} style={{ margin: '12px 0 6px', fontSize: '1.05rem' }} />,
+                              code: ({ node, ...props }) => <code {...props} style={{ background: 'var(--surface)', padding: '1px 6px', borderRadius: 4, fontSize: '0.85em' }} />,
+                              p: ({ node, ...props }) => <p {...props} style={{ margin: '4px 0' }} />,
+                            }}
+                          >
+                            {msg.content}
+                          </ReactMarkdown>
+                        ) : (
+                          <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content || (msg.streaming ? '' : '…')}</div>
+                        )}
                         {msg.streaming && <span style={{ display: 'inline-block', width: 8, height: 14, background: 'var(--accent)', borderRadius: 2, marginLeft: 4, verticalAlign: 'middle', animation: 'blink 1s step-end infinite' }} />}
                       </div>
                     </div>
