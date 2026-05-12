@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import AuthGuard from '@/components/AuthGuard';
 import { apiGetProjects, apiCreateProject, apiGetJiraStatus, apiConnectJira, apiDisconnectJira } from '@/lib/api';
@@ -16,7 +17,9 @@ export default function ProjectsPage() {
 
 function ProjectsContent() {
   const { t } = useLang();
+  const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [newFiles, setNewFiles] = useState<File[]>([]);
   const [projLoading, setProjLoading] = useState(true);
   const [projError, setProjError] = useState('');
   const [newName, setNewName] = useState('');
@@ -43,12 +46,20 @@ function ProjectsContent() {
   async function handleCreateProject(e: React.FormEvent) {
     e.preventDefault(); setCreating(true); setCreateError(''); setCreateSuccess('');
     try {
-      const project = await apiCreateProject({ name: newName, description: newDesc });
-      setProjects(prev => [...prev, project]);
-      setNewName(''); setNewDesc('');
-      setCreateSuccess(`"${project.name}" created!`);
-    } catch (err: any) { setCreateError(err?.detail || t('projects.create_error_default')); }
-    finally { setCreating(false); }
+      const project = await apiCreateProject({
+        name: newName,
+        description: newDesc,
+        files: newFiles,
+      });
+      // Pass description + file names into the chat as the opening user
+      // message — agent will analyze it on landing.
+      const initialMsg = [newDesc.trim(), newFiles.length ? `\n\nПрикреплено: ${newFiles.map(f => f.name).join(', ')}` : ''].join('').trim();
+      const qs = initialMsg ? `?prompt=${encodeURIComponent(initialMsg)}` : '';
+      router.push(`/projects/${project.id}${qs}`);
+    } catch (err: any) {
+      setCreateError(err?.detail || t('projects.create_error_default'));
+      setCreating(false);
+    }
   }
 
   async function loadJira() {
@@ -105,6 +116,23 @@ function ProjectsContent() {
                   <label className="form-label">{t('projects.create_desc')}</label>
                   <textarea className="form-input form-textarea" placeholder={t('projects.create_desc_placeholder')}
                     value={newDesc} onChange={e => setNewDesc(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Прикрепить ТЗ / спеку (PDF или DOCX, до 5 файлов)</label>
+                  <input
+                    className="form-input"
+                    type="file"
+                    multiple
+                    accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    onChange={e => setNewFiles(Array.from(e.target.files || []).slice(0, 5))}
+                  />
+                  {newFiles.length > 0 && (
+                    <div style={{ marginTop: 8, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      {newFiles.map(f => (
+                        <div key={f.name}>📎 {f.name} · {(f.size/1024).toFixed(0)} KB</div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <button type="submit" className="btn btn-primary" disabled={creating}>
                   {creating ? t('projects.create_submitting') : t('projects.create_submit')}

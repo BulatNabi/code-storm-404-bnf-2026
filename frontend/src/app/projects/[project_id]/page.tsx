@@ -1,11 +1,14 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import AuthGuard from '@/components/AuthGuard';
-import { apiGetProject, apiUpdateProject, apiDeleteProject, apiAnalyzeFeature } from '@/lib/api';
+import {
+  apiGetProject, apiUpdateProject, apiDeleteProject,
+  apiAnalyzeFeature, apiGetAnalysisHistory, apiGetAnalysis,
+} from '@/lib/api';
 import { useLang } from '@/lib/lang-context';
 
 interface Project { id: string; name: string; description?: string; created_at?: string; }
@@ -15,9 +18,43 @@ export default function ProjectDetailPage() {
   return <AuthGuard><ProjectDetailContent /></AuthGuard>;
 }
 
+function formatDashboardAsChat(data: any): string {
+  const dash = data?.dashboard || {};
+  const lines: string[] = [];
+  if (dash.zones?.length) {
+    lines.push('### Затронутые области');
+    for (const z of dash.zones) lines.push(`• **${z.label || z.id}** — severity: ${z.severity}`);
+  }
+  if (dash.risks?.length) {
+    lines.push('\n### Риски');
+    for (const r of dash.risks) {
+      lines.push(`• [${r.severity}] ${r.explanation}`);
+      if (r.url && r.url.startsWith('http')) {
+        lines.push(`  📄 [${r.article || 'источник'}](${r.url})`);
+      } else if (r.article) {
+        lines.push(`  📄 ${r.article}`);
+      }
+    }
+  }
+  if (dash.checklist?.length) {
+    lines.push('\n### Чеклист');
+    for (const grp of dash.checklist) {
+      lines.push(`**${grp.role}:**`);
+      for (const item of grp.items || []) lines.push(`- [ ] ${item}`);
+    }
+  }
+  if (dash.documents?.length) {
+    lines.push('\n### Документы к обновлению');
+    for (const d of dash.documents) lines.push(`• ${d}`);
+  }
+  return lines.join('\n') || JSON.stringify(data, null, 2);
+}
+
+
 function ProjectDetailContent() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { t } = useLang();
   const projectId = params.project_id as string;
 
@@ -43,8 +80,22 @@ function ProjectDetailContent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => { loadProject(); }, [projectId]);
+  useEffect(() => { loadProject(); loadHistory(); }, [projectId]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  // Auto-fire analysis when arriving from project-creation flow with
+  // `?prompt=<...>`. Runs after history loaded so we don't double-fire.
+  const [autoFired, setAutoFired] = useState(false);
+  useEffect(() => {
+    if (autoFired || loading) return;
+    const initial = searchParams?.get('prompt');
+    if (initial && initial.trim()) {
+      setAutoFired(true);
+      setInputText(initial);
+      // Defer one tick so React state settles before handleSend reads it.
+      setTimeout(() => handleSend(initial), 50);
+    }
+  }, [loading, autoFired]);
 
   async function loadProject() {
     setLoading(true); setError('');
@@ -53,6 +104,26 @@ function ProjectDetailContent() {
       setProject(data); setUpdateName(data.name); setUpdateDesc(data.description || '');
     } catch (err: any) { setError(err?.detail || 'Failed to load project.'); }
     finally { setLoading(false); }
+  }
+
+  // Load prior analyses from backend → render as a chat-style history.
+  async function loadHistory() {
+    try {
+      const hist = await apiGetAnalysisHistory(projectId, 20, 0);
+      const items = hist?.items || [];
+      if (!items.length) return;
+      // History is newest-first; flip to chronological for chat replay.
+      items.reverse();
+      const past: Message[] = [];
+      for (const it of items) {
+        past.push({ role: 'user', content: it.text_preview || '' });
+        try {
+          const full = await apiGetAnalysis(projectId, it.id);
+          past.push({ role: 'agent', content: formatDashboardAsChat(full), streaming: false });
+        } catch { /* skip broken record */ }
+      }
+      setMessages(prev => [...past, ...prev]);
+    } catch { /* silently ignore — history is optional */ }
   }
 
   async function handleUpdate(e: React.FormEvent) {
@@ -89,14 +160,12 @@ function ProjectDetailContent() {
     });
   }
 
-  async function handleSend() {
-    const text = inputText.trim();
+  async function handleSend(forced?: string) {
+    const text = (forced ?? inputText).trim();
     if (!text && attachedFiles.length === 0) return;
     if (isStreaming) return;
     const fileNames = attachedFiles.map(f => f.name);
     setMessages(prev => [...prev, { role: 'user', content: text, files: fileNames.length ? fileNames : undefined }]);
-    let filesBase64: string[] | undefined;
-    if (attachedFiles.length > 0) filesBase64 = await Promise.all(attachedFiles.map(fileToBase64));
     setInputText(''); setAttachedFiles([]); setIsStreaming(true);
     setMessages(prev => [...prev, { role: 'agent', content: '', streaming: true }]);
     try {
@@ -104,33 +173,7 @@ function ProjectDetailContent() {
       // multipart Form and returns the full {analysis_id, dashboard} once
       // the agent finishes (~10-25s on gpt-4o-mini).
       const data = await apiAnalyzeFeature(projectId, text);
-      const dash = data?.dashboard || {};
-      const lines: string[] = [];
-      if (dash.zones?.length) {
-        lines.push('### Затронутые области');
-        for (const z of dash.zones) {
-          lines.push(`• **${z.label || z.id}** — severity: ${z.severity}`);
-        }
-      }
-      if (dash.risks?.length) {
-        lines.push('\n### Риски');
-        for (const r of dash.risks) {
-          lines.push(`• [${r.severity}] ${r.explanation}`);
-          if (r.article) lines.push(`  📄 ${r.article}`);
-        }
-      }
-      if (dash.checklist?.length) {
-        lines.push('\n### Чеклист');
-        for (const grp of dash.checklist) {
-          lines.push(`**${grp.role}:**`);
-          for (const item of grp.items || []) lines.push(`- [ ] ${item}`);
-        }
-      }
-      if (dash.documents?.length) {
-        lines.push('\n### Документы к обновлению');
-        for (const d of dash.documents) lines.push(`• ${d}`);
-      }
-      const formatted = lines.join('\n') || JSON.stringify(data, null, 2);
+      const formatted = formatDashboardAsChat(data);
       setMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: 'agent', content: formatted, streaming: false }; return u; });
     } catch (err: any) {
       setMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: 'agent', content: err?.message || t('project_detail.chat_error_default'), error: true, streaming: false }; return u; });

@@ -144,9 +144,12 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     started = time.perf_counter()
 
     try:
+        # recursion_limit caps the ReAct loop at ~10 tool roundtrips.
+        # Without this, a confused LLM can burn 20+ minutes spamming
+        # search_regulations with empty-result tag combinations.
         result = await app.state.agent.ainvoke(
             {"messages": [("user", req.feature_description)]},
-            config=config,
+            config={**config, "recursion_limit": 20},
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -196,7 +199,7 @@ async def analyze_stream(req: AnalyzeRequest) -> StreamingResponse:
         try:
             async for chunk in app.state.agent.astream(
                 {"messages": [("user", req.feature_description)]},
-                config=config,
+                config={**config, "recursion_limit": 20},
                 stream_mode="values",
             ):
                 msgs: list[BaseMessage] = chunk.get("messages") or []
@@ -290,7 +293,7 @@ async def analyze_legacy(req: _BackendAnalyzeRequest) -> dict:
     try:
         result = await app.state.agent.ainvoke(
             {"messages": [("user", full_input)]},
-            config=config,
+            config={**config, "recursion_limit": 20},
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
