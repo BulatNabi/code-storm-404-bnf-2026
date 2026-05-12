@@ -1,0 +1,301 @@
+# Архитектура: флоу пользователя и взаимодействие сервисов
+
+## Термины
+
+| Наш термин | Jira-эквивалент |
+|---|---|
+| **Проект** | Board (доска) |
+| **Фича / запрос** | Issue / Task (таска) |
+
+---
+
+## User Flow
+
+### 1. Регистрация / вход
+Пользователь регистрируется или входит → получает JWT токен.
+
+---
+
+### 2. Создание проекта
+
+Два пути:
+
+#### Путь A — вручную
+Пользователь вводит:
+- **Имя** проекта
+- **Описание** проекта
+- **Файлы** (PDF, DOCX) — опционально, контекстные документы
+
+#### Путь B — из Jira (если Jira подключена)
+Вместо ручного ввода пользователь выбирает **доску (Board)** из списка досок подключённой Jira.
+- Имя и описание подтягиваются автоматически из доски
+- Файлы можно добавить дополнительно вручную
+
+**Что происходит на бекенде (оба пути):**
+
+```
+Фронт → POST /api/projects (multipart: name, description, files, jira_board_id?)
+              │
+              ├─→ SQLite: запись в таблицу projects
+              │       (id, name, description, jira_board_id)
+              │
+              ├─→ S3: загрузка каждого файла
+              │       путь: fintech-radar/projects/{project_id}/{filename}
+              │
+              ├─→ SQLite: запись в project_files
+              │       (id, project_id, filename, s3_url)
+              │
+              └─→ Kafka topic: "file-vectorization"
+                      payload: { project_id, file_ids: [...] }
+                      (воркер подхватит и векторизует файлы)
+```
+
+Пока файлы векторизуются в фоне — у пользователя уже открывается диалог проекта.
+
+---
+
+### 3. Диалог — запрос фичи
+
+Два способа задать фичу:
+
+#### Способ A — текстом
+Пользователь вводит описание продуктовой фичи в свободном виде или в формате user story.
+
+#### Способ B — выбрать таску из Jira (если проект привязан к доске)
+В диалоге есть выпадающий список тасок (Issues) из соответствующей Jira-доски.
+При выборе таски:
+- Описание таски автоматически подставляется в поле ввода
+- Прикреплённые к таске файлы можно добавить к запросу
+- `jira_issue_key` сохраняется вместе с анализом — после выполнения summary уйдёт комментарием к этой таске
+
+**Что происходит:**
+
+```
+Фронт → POST /api/projects/{project_id}/analyze
+              │   body: { text: "Как клиент, я хочу..." }
+              │
+              ▼
+        Backend формирует запрос в AI-микросервис:
+        {
+            "project_id":          "uuid",
+            "project_name":        "Мобильный банк v2",
+            "project_description": "Фичи Q3 2026",
+            "feature_text":        "Как клиент, я хочу создавать виртуальную карту..."
+        }
+              │
+              ▼
+        POST http://ai-service:8001/analyze
+              │
+              │   AI-сервис внутри:
+              │   1. По project_id достаёт векторизованные чанки файлов из векторной БД
+              │   2. Строит RAG-контекст: файлы проекта + knowledge base регуляций
+              │   3. Прогоняет через LLM-цепочку (Extractor → RAG → Reasoner → Checklist)
+              │
+              ▼
+        AI возвращает JSON:
+        {
+            "dashboard": {
+                "zones":     [...],   // регуляторные зоны
+                "risks":     [...],   // риски с объяснениями и ссылками
+                "checklist": [...],   // чеклист по ролям (PO / Compliance / Engineering)
+                "documents": [...]    // документы к обновлению
+            },
+            "summary": {
+                "title":       "Compliance review: Виртуальная карта",
+                "description": "Краткое саммари рисков для Jira",
+                "checklist":   [...]  // плоский список для задач в Jira
+            }
+        }
+              │
+              ▼
+        Backend:
+        ├─→ Сохраняет результат в SQLite (analyses.result_json)
+        ├─→ Возвращает фронту полный JSON: { analysis_id, dashboard }
+        └─→ Если анализ привязан к Jira-таске (jira_issue_key заполнен):
+                POST /rest/api/3/issue/{jira_issue_key}/comment
+                body: summary из ответа AI
+                → комментарий появляется прямо в таске в Jira
+```
+
+> **Без SSE.** AI-сервис возвращает полный JSON за один ответ — стриминг только добавлял бы искусственную задержку. Фронт делает обычный POST и ждёт `200 application/json`.
+
+---
+
+### 4. Получение результата
+
+Фронт получает обычный JSON-ответ:
+```json
+{
+    "analysis_id": "uuid",
+    "dashboard": {
+        "zones":     [...],
+        "risks":     [...],
+        "checklist": [...],
+        "documents": [...]
+    }
+}
+```
+После получения рендерит все блоки сразу.
+
+---
+
+### 5. История диалога (существующий проект)
+
+Когда пользователь открывает уже существующий проект — фронт загружает историю всех анализов:
+
+```
+GET /api/projects/{project_id}/history
+→ [{ id, text_preview, zones, created_at }, ...]   # список запросов, новые сверху
+
+GET /api/projects/{project_id}/history/{analysis_id}
+→ { id, text, dashboard, created_at }               # полный результат конкретного анализа
+```
+
+**Что хранится в БД:**
+- Каждый вызов `/analyze` создаёт запись в таблице `analyses`
+- Поля: `id`, `project_id`, `text` (запрос пользователя), `result_json` (полный ответ AI), `jira_issue_key`, `created_at`
+- Фронт отображает историю как список карточек; клик на карточку → полный результат
+- Кнопка «Новый запрос» в том же проекте → ещё одна запись в `analyses`
+
+**История уже реализована в бекенде** — эндпоинты существуют, данные сохраняются.
+
+---
+
+## Схема данных
+
+### Таблица `projects`
+```
+id             TEXT  PK
+user_id        TEXT  FK → users.id
+name           TEXT
+description    TEXT
+jira_board_id  TEXT  nullable  (ID доски в Jira, если проект создан из Jira)
+created_at     DATETIME
+updated_at     DATETIME
+```
+
+### Таблица `project_files` (новая)
+```
+id            TEXT  PK
+project_id    TEXT  FK → projects.id
+filename      TEXT
+s3_url        TEXT  (полный URL в S3)
+s3_key        TEXT  (ключ для presigned URL)
+size          INT
+mime_type     TEXT
+vectorized    BOOL  default false  (воркер ставит true после векторизации)
+created_at    DATETIME
+```
+
+### Таблица `analyses`
+```
+id              TEXT  PK
+project_id      TEXT  FK → projects.id
+text            TEXT  (feature description от пользователя)
+jira_issue_key  TEXT  nullable  (если фича выбрана из Jira-таски)
+result_json     TEXT  (полный JSON от AI: dashboard + summary)
+created_at      DATETIME
+```
+
+> `analysis_files` больше не нужна — файлы привязаны к проекту, а не к анализу.
+
+---
+
+## Kafka
+
+**Инфраструктура:**
+- Bootstrap (с хоста / внешние контейнеры): `138.124.54.72:9094`
+- Bootstrap (контейнеры в той же Docker-сети): `kafka:9092`
+- Backend использует `138.124.54.72:9094` — он в отдельной сети `fintech-radar-net`
+- Env-переменная: `KAFKA_BOOTSTRAP_SERVERS`
+
+**Реализация в бекенде:** `backend/app/kafka_producer.py`
+- Продюсер стартует вместе с приложением через FastAPI `lifespan`
+- Если Kafka недоступна при старте — приложение всё равно поднимается, продюсер `None`
+- Все ошибки публикации логируются как warning, запрос пользователя не падает
+
+---
+
+**Topic: `file-vectorization`**
+
+Продюсер: Backend — при создании проекта с файлами (`POST /api/projects`)  
+Консьюмер: AI-воркер — векторизует файлы и кладёт чанки в Qdrant
+
+Событие публикуется **после** `db.commit()` — к этому моменту файлы уже в S3 и в БД.
+
+```json
+{
+    "project_id": "uuid",
+    "file_ids":   ["uuid1", "uuid2"],
+    "s3_keys":    ["fintech-radar/projects/uuid/spec.pdf"]
+}
+```
+
+**Поток:**
+```
+POST /api/projects (+ files)
+  → валидация файлов (PDF/DOCX, ≤5 штук, ≤10МБ каждый)
+  → S3: PUT fintech-radar/projects/{project_id}/{filename}
+  → SQLite: INSERT project_files (id, project_id, s3_key, ...)
+  → db.commit()
+  → Kafka: publish "file-vectorization" { project_id, file_ids, s3_keys }
+                        ↓
+              AI-воркер читает событие
+              → скачивает файлы из S3 по s3_keys
+              → векторизует, кладёт в Qdrant
+              → (опционально) помечает project_files.vectorized = true
+```
+
+**Что происходит без файлов:** событие в Kafka не публикуется, проект создаётся как обычно.
+
+---
+
+## Контракт Backend → AI-сервис
+
+### Request
+```
+POST http://ai-service:8001/analyze
+Content-Type: application/json
+
+{
+    "project_id":          "uuid",
+    "project_name":        "Мобильный банк v2",
+    "project_description": "Фичи Q3 2026",
+    "feature_text":        "Как клиент, я хочу создавать виртуальную карту..."
+}
+```
+
+### Response
+```json
+{
+    "dashboard": {
+        "zones": [
+            { "id": "gdpr", "label": "GDPR", "severity": "high" }
+        ],
+        "risks": [
+            {
+                "zone_id":     "gdpr",
+                "explanation": "...",
+                "article":     "GDPR Art. 9",
+                "url":         "https://gdpr-info.eu/art-9-gdpr/",
+                "severity":    "high"
+            }
+        ],
+        "checklist": [
+            { "role": "PO",          "items": ["..."] },
+            { "role": "Compliance",  "items": ["..."] },
+            { "role": "Engineering", "items": ["..."] }
+        ],
+        "documents": ["Privacy Policy → раздел 'Платёжные данные'"]
+    },
+    "summary": {
+        "title":       "Compliance review: Виртуальная карта",
+        "description": "Краткое саммари рисков для Jira-задачи",
+        "checklist": [
+            "[PO] Добавить экран согласия на обработку данных",
+            "[Compliance] Провести DPIA (Art. 35 GDPR)"
+        ]
+    }
+}
+```
+

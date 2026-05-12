@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic[email]
+python-jose[cryptography]
+bcrypt
+httpx
+sqlalchemy
+email-validator
+boto3
+aiokafka

@@ -99,9 +99,28 @@
 
 ### API эндпоинты
 
+Полная спека — `docs/api_backend_frontend.md`
+
 | Метод | Путь | Описание |
 |---|---|---|
-| | | |
+| POST | /api/auth/register | Регистрация |
+| POST | /api/auth/login | Вход, получение JWT |
+| POST | /api/auth/refresh | Обновление access_token |
+| POST | /api/auth/logout | Инвалидация refresh_token |
+| GET | /api/projects | Список проектов пользователя |
+| POST | /api/projects | Создать проект |
+| GET | /api/projects/{id} | Получить проект |
+| PATCH | /api/projects/{id} | Обновить название/описание |
+| DELETE | /api/projects/{id} | Удалить проект |
+| POST | /api/projects/{id}/analyze | Запустить анализ (SSE, multipart) |
+| GET | /api/projects/{id}/history | История анализов проекта |
+| GET | /api/projects/{id}/history/{aid} | Полный результат анализа |
+| GET | /api/integrations/jira | Статус подключения Jira |
+| POST | /api/integrations/jira/connect | Привязать Jira (domain + API token) |
+| DELETE | /api/integrations/jira | Отвязать Jira |
+| GET | /api/integrations/jira/issues | Список задач из Jira |
+| GET | /api/integrations/jira/issues/{key} | Детали таски (описание + вложения) |
+| POST | /api/integrations/jira/issues/{key}/import | Скачать вложения таски для анализа |
 
 ---
 
