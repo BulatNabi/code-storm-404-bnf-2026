@@ -162,12 +162,31 @@ function ProjectsContent() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, overflowY: 'auto', maxHeight: 320 }}>
                 {projects.map(project => (
                   <Link key={project.id} href={`/projects/${project.id}`}
-                    style={{ display: 'block', padding: '14px 16px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', transition: 'border-color 0.2s, transform 0.15s' }}
+                    style={{ display: 'block', padding: '14px 16px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', transition: 'border-color 0.2s, transform 0.15s', minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLElement).style.transform = 'translateX(4px)'; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.transform = 'translateX(0)'; }}
                   >
-                    <div style={{ fontWeight: 500, marginBottom: 4 }}>{project.name}</div>
-                    {project.description && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.description}</div>}
+                    <div style={{ fontWeight: 500, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</div>
+                    {project.description && (
+                      <div
+                        style={{
+                          color: 'var(--text-muted)',
+                          fontSize: '0.8rem',
+                          // Two-line clamp + ellipsis. Falls back to single-line
+                          // truncation in browsers without -webkit-line-clamp.
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical' as any,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          lineHeight: 1.45,
+                          maxHeight: '2.9em',
+                        }}
+                        title={project.description}
+                      >
+                        {project.description}
+                      </div>
+                    )}
                   </Link>
                 ))}
               </div>
