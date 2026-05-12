@@ -165,8 +165,19 @@ GDPR + KYC + AML + PSD2/3 + AI Act + локального законодател
 
 
 def build_agent():
-    """Build the ReAct agent. Returns a compiled LangGraph runnable."""
-    model_name = os.environ.get("AGENT_MODEL", "openai/gpt-4o-mini")
+    """Build the ReAct agent. Returns a compiled LangGraph runnable.
+
+    Default model is `google/gemini-3.1-flash-lite-preview` via OpenRouter.
+    Empirically beats gpt-4o-mini by a wide margin on this task:
+      • Reliably finds 2-3 domains (gpt-4o-mini stops at 1)
+      • Fills red_flags with concrete blockers
+      • Cites specific legal categories ("special category data") in
+        rationales instead of "нужно соблюдать законодательство"
+      • 8-12s vs 30-60s
+    Override via env: AGENT_MODEL=anthropic/claude-3.5-sonnet for max
+    quality, or AGENT_MODEL=openai/gpt-4o-mini to revert.
+    """
+    model_name = os.environ.get("AGENT_MODEL", "google/gemini-3.1-flash-lite-preview")
     api_key    = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
     base_url   = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1")
 
