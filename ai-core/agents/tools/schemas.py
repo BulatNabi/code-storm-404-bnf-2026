@@ -77,6 +77,7 @@ class RegulatoryDomainResult(BaseModel):
 class FinalReport(BaseModel):
     feature_summary: str = Field(description="Краткое резюме фичи, как её понял агент")
     overall_risk: Severity = Field(description="Общий максимальный уровень риска")
+    jira_comment_summary: str = Field(description="Готовый, сжатый markdown-комментарий для вставки в Jira-тикет, содержащий выжимку рисков и ToDo для разработчиков")
     domains: List[RegulatoryDomainResult] = Field(description="Затронутые домены с чеклистами")
     documents_to_update: List[str] = Field(description="Внутренние документы (Оферта, Политика и т.д.), которые возможно придется обновить")
     red_flags: List[str] = Field(default_factory=list, description="Критические риски, требующие немедленного внимания (если есть)")

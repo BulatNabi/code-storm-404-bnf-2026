@@ -6,6 +6,7 @@ from typing import Literal
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
 
 from .tools.search import (
     search_regulations,
@@ -44,6 +45,7 @@ SYSTEM_PROMPT = """Ты — ассистент-комплаенс. По опис
 {
   "feature_summary": "Краткое резюме фичи",
   "overall_risk": "critical" | "high" | "medium" | "low",
+  "jira_comment_summary": "Готовый markdown-комментарий для вставки в Jira (должен содержать TL;DR рисков и маркированный ToDo-лист для команды)",
   "domains": [
     {
       "domain": "название тега (например, personal_data)",
@@ -88,10 +90,14 @@ def build_agent():
         }
     )
     
+    # In-memory хранилище для сохранения контекста (сессий)
+    memory = MemorySaver()
+    
     agent_executor = create_react_agent(
         llm, 
         TOOLS, 
-        prompt=SYSTEM_PROMPT
+        prompt=SYSTEM_PROMPT,
+        checkpointer=memory
     )
     
     return agent_executor
