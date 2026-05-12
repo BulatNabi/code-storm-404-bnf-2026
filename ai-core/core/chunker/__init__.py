@@ -11,7 +11,7 @@
 - DocumentParser: главный пайплайн парсинга
 
 Использование:
-    from chunker import DocumentParser, LLMClient
+    from core.chunker import DocumentParser, LLMClient
     
     client = LLMClient.from_env()
     parser = DocumentParser(client)

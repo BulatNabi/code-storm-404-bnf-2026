@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from textwrap import shorten
 from dotenv import load_dotenv
-from common.client.llm_client import LLMClient
+from shared.common.client.llm_client import LLMClient
 
 
 ROOT = Path(__file__).resolve().parents[1]

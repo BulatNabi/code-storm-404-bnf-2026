@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any
 
-from common.tags_loader import get_tags_loader
+from shared.common.tags_loader import get_tags_loader
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 

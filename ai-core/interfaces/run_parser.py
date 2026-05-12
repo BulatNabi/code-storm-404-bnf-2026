@@ -2,11 +2,15 @@ import argparse
 import asyncio
 import logging
 import sys
+import os
 from pathlib import Path
+
+# Добавляем корневую директорию ai-core в PYTHONPATH
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from dotenv import load_dotenv
 
-from chunker import DocumentParser, LLMClient
+from core.chunker import DocumentParser, LLMClient
 
 load_dotenv()
 

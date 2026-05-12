@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional
 
-from common.client.llm_client import LLMClient
+from shared.common.client.llm_client import LLMClient
 
 from .batching import estimate_tokens, group_by_level1, split_by_token_limit
 from .models import ChunkRef, Tag

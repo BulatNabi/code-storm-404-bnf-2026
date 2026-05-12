@@ -4,7 +4,7 @@ import json
 import logging
 from pathlib import Path
 
-from common.client.llm_client import LLMClient
+from shared.common.client.llm_client import LLMClient
 from dotenv import load_dotenv
 
 from .models import Tag

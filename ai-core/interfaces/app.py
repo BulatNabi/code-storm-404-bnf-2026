@@ -6,7 +6,7 @@ import warnings
 warnings.filterwarnings("ignore", module="transformers")
 
 # Добавляем текущую директорию в PYTHONPATH для корректного импорта модулей ai-core
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import streamlit as st
 import asyncio
@@ -14,10 +14,10 @@ import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
-from common.client.llm_client import LLMClient
-from feature_assistant import FeatureRegulatoryAssistant
-from rules_generator.generator import RuleGenerator
-from converter.document_converter import DoclingConverter
+from shared.common.client.llm_client import LLMClient
+from interfaces.feature_assistant import FeatureRegulatoryAssistant
+from core.rules_generator.generator import RuleGenerator
+from core.converter.document_converter import DoclingConverter
 
 # Загружаем переменные окружения (.env)
 load_dotenv()
@@ -48,7 +48,7 @@ with tab1:
     st.markdown("Введите описание вашей продуктовой фичи. Ассистент определит затронутые регуляторные области и **автоматически сформирует чек-лист на основе правил, ранее извлеченных из загруженных документов (НАП)**.")
     
     # Показываем статус базы знаний
-    from common.rules_db import get_rules_db
+    from shared.common.rules_db import get_rules_db
     db = get_rules_db()
     total_rules = len(db.get_all_rules())
     if total_rules == 0:

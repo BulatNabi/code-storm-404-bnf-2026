@@ -8,11 +8,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from common.client import LLMClient
+from shared.common.client import LLMClient
 from .chunker import process_document, estimate_tokens
 from .prompts import PromptTemplates
 from .utils import assign_ids, build_metadata, validate_rules
-from common.tags_loader import get_tags_loader
+from shared.common.tags_loader import get_tags_loader
 
 logger = logging.getLogger(__name__)
 
