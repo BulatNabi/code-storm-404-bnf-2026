@@ -15,7 +15,7 @@ from kafka import KafkaConsumer, KafkaProducer
 from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.errors import TopicAlreadyExistsError
 
-from common.client import LLMClient
+from shared.common.client import LLMClient
 from core.generator import RuleGenerator
 
 logger = logging.getLogger(__name__)

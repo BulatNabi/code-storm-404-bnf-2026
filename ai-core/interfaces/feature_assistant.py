@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 
-from common.client.llm_client import LLMClient
+from shared.common.client.llm_client import LLMClient
 
 RiskLevel = Literal["low", "medium", "high"]
 
@@ -366,12 +366,12 @@ class FeatureRegulatoryAssistant:
         self.llm = llm_client
         
         # Загружаем теги
-        from common.tags_loader import get_tags_loader
+        from shared.common.tags_loader import get_tags_loader
         loader = get_tags_loader()
         tags_list = loader.get_all_tags()
         
         # Загружаем динамически сгенерированные правила из НАП
-        from common.rules_db import get_rules_db
+        from shared.common.rules_db import get_rules_db
         rules_db = get_rules_db()
         
         self.domains = []

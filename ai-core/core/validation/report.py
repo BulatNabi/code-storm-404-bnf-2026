@@ -6,7 +6,7 @@ from typing import Dict, List
 from collections import defaultdict
 
 from .models import RuleResult
-from common.tags_loader import get_tags_loader
+from shared.common.tags_loader import get_tags_loader
 
 
 def build_summary(rule_results: List[RuleResult]) -> Dict:

@@ -5,12 +5,12 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from common.client.llm_client import LLMClient
+from shared.common.client.llm_client import LLMClient
 from .chunker import process_document, estimate_tokens
 from .prompts import PromptTemplates
 from .utils import assign_ids, build_metadata, validate_rules
-from common.tags_loader import get_tags_loader
-from common.rules_db import get_rules_db
+from shared.common.tags_loader import get_tags_loader
+from shared.common.rules_db import get_rules_db
 
 logger = logging.getLogger(__name__)
 

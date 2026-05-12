@@ -3,12 +3,16 @@ import asyncio
 import json
 import logging
 import sys
+import os
 from pathlib import Path
+
+# Добавляем корневую директорию ai-core в PYTHONPATH
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from dotenv import load_dotenv
 
-from common.client.llm_client import LLMClient
-from feature_assistant import FeatureRegulatoryAssistant
+from shared.common.client.llm_client import LLMClient
+from interfaces.feature_assistant import FeatureRegulatoryAssistant
 
 
 def _read_input_text(args: argparse.Namespace) -> str:

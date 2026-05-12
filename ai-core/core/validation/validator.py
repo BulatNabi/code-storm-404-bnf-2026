@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Dict, Iterable, List, Sequence, Set
 
-from common.client.llm_client import LLMClient
+from shared.common.client.llm_client import LLMClient
 
 from .models import Evidence, Rule, RuleResult, ValidationChunkResult
 

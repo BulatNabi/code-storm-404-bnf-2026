@@ -5,11 +5,11 @@ import logging
 from pathlib import Path
 from typing import List
 
-from common.client.llm_client import LLMClient
+from shared.common.client.llm_client import LLMClient
 from dotenv import load_dotenv
 
 from .models import Rule, SourceInfo
-from common.tags_loader import get_tags_loader
+from shared.common.tags_loader import get_tags_loader
 from .report import (
     save_json,
     save_markdown,

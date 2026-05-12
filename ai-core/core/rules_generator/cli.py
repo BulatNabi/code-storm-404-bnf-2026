@@ -8,7 +8,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from common.client.llm_client import LLMClient
+from shared.common.client.llm_client import LLMClient
 from .generator import RuleGenerator
 
 
