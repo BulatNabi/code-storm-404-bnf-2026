@@ -283,9 +283,8 @@ triggers a full rebuild of that doc's ES entry (cheap re-fetch from
 Postgres + S3 → re-embed → upsert).
 
 After each successful index op the worker publishes a
-`document.indexed` event on `reg.indexed` (toggleable via
-`--no-publish`; on by default in stream mode, off by default in
-`--backfill` so a bootstrap doesn't flood the topic):
+`document.indexed` event on `reg.indexed` (on by default in both
+modes; pass `--no-publish` to suppress):
 
 ```json
 {

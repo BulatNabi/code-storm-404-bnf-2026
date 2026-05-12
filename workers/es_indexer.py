@@ -403,18 +403,21 @@ class ESIndexer:
         ORDER BY d.doc_id
         {cap}
         """
-        # Named cursor → server-side streaming, no full-result buffering.
-        with self.conn.cursor(name="es_backfill", cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.itersize = batch_size
+        # Client-side cursor — psycopg2 named cursors require an explicit
+        # transaction, and the connection is in autocommit=True. The full
+        # result set is ~1500 rows for our scale, so client-side buffering
+        # is fine; we still yield in `batch_size` chunks downstream.
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql)
             buf: list[DocRow] = []
-            for row in cur:
-                buf.append(_row_to_doc(row))
-                if len(buf) >= batch_size:
-                    yield buf
-                    buf = []
-            if buf:
+            while True:
+                rows = cur.fetchmany(batch_size)
+                if not rows:
+                    break
+                for row in rows:
+                    buf.append(_row_to_doc(row))
                 yield buf
+                buf = []
 
     def _fetch_doc_rows_by_ids(self, doc_ids: list[str]) -> list[DocRow]:
         if not doc_ids:
@@ -543,8 +546,7 @@ def main() -> None:
     ap.add_argument("--recreate-index", action="store_true",
                     help="DROP and CREATE the ES index before running (destructive)")
     ap.add_argument("--no-publish", action="store_true",
-                    help="Skip producing reg.indexed events. Default-on for "
-                         "--backfill so a bootstrap doesn't flood the topic.")
+                    help="Skip producing reg.indexed events (default: publish on)")
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -557,11 +559,10 @@ def main() -> None:
     logging.getLogger("openai").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    # Default: publish only in stream mode. Backfill is bulky enough that
-    # flooding the topic by default isn't useful — pass --no-publish=false
-    # equivalent by omitting --no-publish if you do want backfill events.
-    publish = not args.no_publish and not args.backfill
-    idx = ESIndexer(publish=publish)
+    # Publish reg.indexed events by default in both modes. Backfill on
+    # first run produces one event per doc which makes the topic visible
+    # to operators and to any downstream consumer that wants to react.
+    idx = ESIndexer(publish=not args.no_publish)
     idx.ensure_index(recreate=args.recreate_index)
 
     if args.backfill:
