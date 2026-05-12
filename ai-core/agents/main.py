@@ -253,3 +253,120 @@ async def analyze_stream(req: AnalyzeRequest) -> StreamingResponse:
 def _sse(event: str, data: dict) -> bytes:
     """Format a single Server-Sent Event."""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+# ── Backend-compat endpoint ────────────────────────────────────────────────
+#
+# The `backend` service (FastAPI :8000) calls `POST /analyze` with a payload
+# of {project_id, project_name, project_description, feature_text} and
+# expects a response of {dashboard: {zones, risks, checklist, documents},
+# summary}. That contract pre-dates the structured FinalReport we now
+# produce — this endpoint adapts between the two so nothing on the backend
+# side has to change.
+
+class _BackendAnalyzeRequest(BaseModel):
+    project_id:          Optional[str] = None
+    project_name:        Optional[str] = None
+    project_description: Optional[str] = None
+    feature_text:        str = Field(..., min_length=1)
+
+
+@app.post("/analyze")
+async def analyze_legacy(req: _BackendAnalyzeRequest) -> dict:
+    """Legacy contract for backend/app/routers/analysis.py — accepts
+    `feature_text`, returns `{dashboard, summary}` shape."""
+    session_id = req.project_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": session_id}}
+
+    project_prefix = ""
+    if req.project_name or req.project_description:
+        project_prefix = (
+            f"Контекст продукта: {req.project_name or ''}. "
+            f"{req.project_description or ''}\n\n"
+        )
+
+    full_input = f"{project_prefix}Фича: {req.feature_text}"
+
+    try:
+        result = await app.state.agent.ainvoke(
+            {"messages": [("user", full_input)]},
+            config=config,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    messages = result.get("messages") or []
+    extracted = extract_final_report_or_raw(messages)
+    report = extracted.get("report") or {}
+
+    return {
+        "dashboard": _final_report_to_dashboard(report),
+        "summary":   report.get("feature_summary") or req.feature_text[:200],
+        "report":    report,        # full structured FinalReport for clients that want it
+    }
+
+
+def _final_report_to_dashboard(report: dict) -> dict:
+    """Adapt the FinalReport (domains/checklist/...) into the legacy
+    dashboard shape (zones/risks/checklist/documents) the frontend
+    already renders."""
+    domains = report.get("domains") or []
+    zones, risks = [], []
+    by_role: dict[str, list[str]] = {}
+
+    for d in domains:
+        domain_id = d.get("domain") or "other"
+        severity  = d.get("risk_level") or "medium"
+
+        zones.append({
+            "id":       domain_id,
+            "label":    _humanize_tag(domain_id),
+            "severity": severity,
+        })
+
+        # One "risk" per domain — the first checklist item carries the
+        # canonical doc_links + quotes that we surface as proof.
+        first_item = (d.get("checklist") or [{}])[0]
+        doc_links  = first_item.get("doc_links") or []
+        quotes     = first_item.get("quotes") or []
+        risks.append({
+            "zone_id":     domain_id,
+            "explanation": d.get("risk_assessment_details") or d.get("reasoning") or "",
+            "article":     ", ".join(doc_links[:2]),
+            "url":         f"https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:{doc_links[0]}" if doc_links and doc_links[0].startswith("eurlex-") else (doc_links[0] if doc_links else ""),
+            "severity":    severity,
+            "quote":       quotes[0] if quotes else "",
+        })
+
+        for item in d.get("checklist") or []:
+            role = (item.get("role") or "Engineering").strip()
+            by_role.setdefault(role, []).append(item.get("action") or "")
+
+    checklist = [
+        {"role": role, "items": [i for i in items if i]}
+        for role, items in by_role.items()
+    ]
+
+    return {
+        "zones":     zones,
+        "risks":     risks,
+        "checklist": checklist,
+        "documents": report.get("documents_to_update") or [],
+    }
+
+
+_TAG_LABEL = {
+    "personal_data":        "Персональные данные / GDPR",
+    "aml_cft":              "AML / CFT",
+    "kyc":                  "KYC",
+    "payments":             "Платежи / PSD2",
+    "ai_scoring":           "AI / Скоринг",
+    "cybersecurity":        "Кибербезопасность",
+    "consumer_protection":  "Защита прав потребителей",
+    "crypto":               "Криптоактивы",
+    "reporting":            "Отчётность",
+    "data_protection":      "Защита данных",
+}
+
+def _humanize_tag(tag: str) -> str:
+    return _TAG_LABEL.get(tag, tag.replace("_", " ").title())
