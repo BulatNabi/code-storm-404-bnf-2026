@@ -240,13 +240,13 @@ function ProjectDetailContent() {
                     <div style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, background: msg.role === 'user' ? 'var(--accent-dim)' : 'linear-gradient(135deg, var(--accent), #a78bfa)', border: msg.role === 'user' ? '1px solid rgba(108,99,255,0.3)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', color: msg.role === 'user' ? 'var(--accent)' : '#fff' }}>
                       {msg.role === 'user' ? '↑' : '◈'}
                     </div>
-                    <div style={{ maxWidth: '72%', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ maxWidth: msg.role === 'user' ? '72%' : '92%', flex: msg.role === 'agent' ? 1 : 'initial', display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {msg.files && msg.files.length > 0 && (
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
                           {msg.files.map((f, fi) => <span key={fi} style={{ padding: '4px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 100, fontSize: '0.72rem', color: 'var(--text-muted)' }}>📎 {f}</span>)}
                         </div>
                       )}
-                      <div className={msg.role === 'agent' && !msg.error ? 'chat-md' : undefined} style={{ padding: '12px 16px', borderRadius: msg.role === 'user' ? '16px 4px 16px 16px' : '4px 16px 16px 16px', background: msg.role === 'user' ? 'var(--accent)' : msg.error ? 'var(--danger-dim)' : 'var(--surface2)', border: msg.role === 'agent' ? `1px solid ${msg.error ? 'rgba(255,77,106,0.25)' : 'var(--border)'}` : 'none', color: msg.role === 'user' ? '#fff' : msg.error ? 'var(--danger)' : 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7, wordBreak: 'break-word' }}>
+                      <div className={msg.role === 'agent' && !msg.error ? 'chat-md' : undefined} style={{ padding: msg.role === 'agent' ? '18px 22px' : '12px 16px', borderRadius: msg.role === 'user' ? '16px 4px 16px 16px' : '4px 16px 16px 16px', background: msg.role === 'user' ? 'var(--accent)' : msg.error ? 'var(--danger-dim)' : 'var(--surface2)', border: msg.role === 'agent' ? `1px solid ${msg.error ? 'rgba(255,77,106,0.25)' : 'var(--border)'}` : 'none', color: msg.role === 'user' ? '#fff' : msg.error ? 'var(--danger)' : 'var(--text)', fontSize: msg.role === 'agent' ? '0.95rem' : '0.9rem', lineHeight: 1.7, wordBreak: 'break-word' }}>
                         {msg.role === 'agent' && msg.content && !msg.error ? (
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
