@@ -302,11 +302,69 @@ async def analyze_legacy(req: _BackendAnalyzeRequest) -> dict:
     extracted = extract_final_report_or_raw(messages)
     report = extracted.get("report") or {}
 
+    # Server-side enrichment: every doc_id referenced in the report gets
+    # its real source_url + title pulled from Elasticsearch and stitched
+    # into each checklist item under `references: [{doc_id, title, source_url}]`.
+    # Frontend renders those as clickable [title](url) markdown links.
+    await _enrich_doc_links(report)
+
     return {
         "dashboard": _final_report_to_dashboard(report),
         "summary":   report.get("feature_summary") or req.feature_text[:200],
         "report":    report,        # full structured FinalReport for clients that want it
     }
+
+
+async def _enrich_doc_links(report: dict) -> None:
+    """Mutate `report` in-place: for every doc_id mentioned in the
+    checklist, attach a `references` list with [{doc_id, title, source_url, source}].
+
+    Does one batched mget against ES regardless of how many doc_ids
+    appear (typically 1-5), so this adds ~10-30ms total.
+    """
+    from .tools._es import get_es
+
+    domains = report.get("domains") or []
+    all_ids: set[str] = set()
+    for d in domains:
+        for item in d.get("checklist") or []:
+            for did in item.get("doc_links") or []:
+                if isinstance(did, str) and did:
+                    all_ids.add(did)
+    if not all_ids:
+        return
+
+    try:
+        resp = await get_es().mget(
+            index="regtech-docs",
+            body={"ids": sorted(all_ids)},
+            source=["doc_id", "title", "source", "source_url"],
+        )
+    except Exception:
+        return                          # silently skip if ES hiccups
+
+    lookup: dict[str, dict] = {}
+    for doc in resp.get("docs") or []:
+        if doc.get("found") and doc.get("_source"):
+            src = doc["_source"]
+            lookup[src.get("doc_id") or doc.get("_id")] = {
+                "doc_id":     src.get("doc_id") or doc.get("_id"),
+                "title":      src.get("title") or doc.get("_id"),
+                "source":     src.get("source"),
+                "source_url": src.get("source_url"),
+            }
+
+    for d in domains:
+        for item in d.get("checklist") or []:
+            refs = []
+            for did in item.get("doc_links") or []:
+                ref = lookup.get(did)
+                if ref:
+                    refs.append(ref)
+                else:
+                    # doc_id not in index — surface so frontend can show "missing"
+                    refs.append({"doc_id": did, "title": did, "source": None, "source_url": None})
+            item["references"] = refs
 
 
 def _final_report_to_dashboard(report: dict) -> dict:

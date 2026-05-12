@@ -20,36 +20,160 @@ export default function ProjectDetailPage() {
   return <AuthGuard><ProjectDetailContent /></AuthGuard>;
 }
 
+// Severity badges: 1-char emoji + Russian label. Driven from the
+// FinalReport's `risk_level` / `severity` strings.
+const SEVERITY = {
+  critical: { mark: '🔴', label: 'Критический' },
+  high:     { mark: '🟠', label: 'Высокий'     },
+  medium:   { mark: '🟡', label: 'Средний'     },
+  low:      { mark: '🟢', label: 'Низкий'      },
+} as const;
+
+const TAG_LABEL: Record<string, string> = {
+  personal_data:       'Персональные данные / GDPR',
+  aml_cft:             'AML / CFT (Anti-Money Laundering)',
+  kyc:                 'KYC (Know Your Customer)',
+  payments:            'Платежи / PSD2',
+  ai_scoring:          'AI / Скоринг',
+  cybersecurity:       'Кибербезопасность',
+  consumer_protection: 'Защита прав потребителей',
+  crypto:              'Криптоактивы / MiCA',
+  reporting:           'Отчётность',
+  data_protection:     'Защита данных',
+};
+
+function humanize(tag: string): string {
+  return TAG_LABEL[tag] || tag.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// Build a complete, structured compliance report from a FinalReport.
+// The /analyze endpoint returns BOTH a thin `dashboard` (legacy UI) and
+// the full `report` (FinalReport schema with all fields). We use the
+// rich `report` whenever available and fall back to dashboard for older
+// records.
 function formatDashboardAsChat(data: any): string {
-  const dash = data?.dashboard || {};
+  const rep = data?.report || {};
+  if (!rep || !rep.domains) {
+    return formatLegacy(data?.dashboard || {});
+  }
+
+  const sev = (k: string) => SEVERITY[k as keyof typeof SEVERITY] || { mark: '⚪', label: k };
+  const lines: string[] = [];
+
+  // ── HEADER ─────────────────────────────────────────────────────────
+  const overall = sev(rep.overall_risk || 'medium');
+  lines.push(`# 📋 Compliance Report — ${overall.mark} ${overall.label} risk`);
+  if (rep.feature_summary) {
+    lines.push('');
+    lines.push(`**Что анализируем:** ${rep.feature_summary}`);
+  }
+
+  // ── RED FLAGS (top, before details) ────────────────────────────────
+  if (rep.red_flags?.length) {
+    lines.push('');
+    lines.push('## 🚨 Red Flags — блокеры релиза');
+    for (const rf of rep.red_flags) lines.push(`> ⛔ ${rf}`);
+  }
+
+  // ── DOMAINS ────────────────────────────────────────────────────────
+  if (rep.domains?.length) {
+    lines.push('');
+    lines.push(`## 🎯 Затронутые регуляторные области (${rep.domains.length})`);
+    for (const dom of rep.domains) {
+      const ds = sev(dom.risk_level || 'medium');
+      lines.push('');
+      lines.push(`### ${ds.mark} ${humanize(dom.domain || '')} — ${ds.label}`);
+      if (dom.reasoning) {
+        lines.push('');
+        lines.push(`**Почему затронута:** ${dom.reasoning}`);
+      }
+      if (dom.risk_assessment_details) {
+        lines.push('');
+        lines.push(`**Последствия несоблюдения:** ${dom.risk_assessment_details}`);
+      }
+
+      if (dom.checklist?.length) {
+        lines.push('');
+        lines.push(`**Чеклист действий (${dom.checklist.length}):**`);
+        for (const [i, item] of (dom.checklist as any[]).entries()) {
+          lines.push('');
+          lines.push(`**${i + 1}. ${item.action || ''}**`);
+          if (item.role) lines.push(`   - 👤 Ответственный: \`${item.role}\``);
+          if (item.rationale) lines.push(`   - 💡 Обоснование: ${item.rationale}`);
+          if (item.compliance_metric) lines.push(`   - 📊 Метрика проверки: ${item.compliance_metric}`);
+          // Prefer the server-enriched `references` (with source_url + title);
+          // fall back to bare doc_ids for older history records.
+          const refs = item.references || (item.doc_links || []).map((d: string) => ({ doc_id: d, title: d, source_url: null }));
+          if (refs.length) {
+            const parts = refs.map((r: any) => {
+              const label = r.title && r.title !== r.doc_id
+                ? `${r.title.slice(0, 80)}${r.title.length > 80 ? '…' : ''}`
+                : r.doc_id;
+              return r.source_url ? `[${label}](${r.source_url})` : `\`${r.doc_id}\``;
+            }).join(' · ');
+            lines.push(`   - 📎 Источник: ${parts}`);
+          }
+          if (item.quotes?.length) {
+            for (const q of item.quotes) lines.push(`   - 💬 *«${q}»*`);
+          }
+        }
+      }
+    }
+  } else {
+    lines.push('');
+    lines.push('_Регуляторных рисков не обнаружено в индексе. Рекомендуется консультация с DPO/Compliance._');
+  }
+
+  // ── INTERNAL DOCS ──────────────────────────────────────────────────
+  if (rep.documents_to_update?.length) {
+    lines.push('');
+    lines.push('## 📄 Внутренние документы к обновлению');
+    for (const d of rep.documents_to_update) lines.push(`- ${d}`);
+  }
+
+  // ── JIRA-READY MARKDOWN BLOCK ──────────────────────────────────────
+  if (rep.jira_comment_summary) {
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+    lines.push('## 🎫 Готовый комментарий для Jira');
+    lines.push('');
+    lines.push('```markdown');
+    lines.push(String(rep.jira_comment_summary));
+    lines.push('```');
+  }
+
+  return lines.join('\n');
+}
+
+
+function formatLegacy(dash: any): string {
+  // Fallback for old history records that only have dashboard, no
+  // full FinalReport.
   const lines: string[] = [];
   if (dash.zones?.length) {
     lines.push('### Затронутые области');
-    for (const z of dash.zones) lines.push(`• **${z.label || z.id}** — severity: ${z.severity}`);
+    for (const z of dash.zones) lines.push(`- **${z.label || z.id}** — ${z.severity}`);
   }
   if (dash.risks?.length) {
     lines.push('\n### Риски');
     for (const r of dash.risks) {
-      lines.push(`• [${r.severity}] ${r.explanation}`);
-      if (r.url && r.url.startsWith('http')) {
-        lines.push(`  📄 [${r.article || 'источник'}](${r.url})`);
-      } else if (r.article) {
-        lines.push(`  📄 ${r.article}`);
-      }
+      lines.push(`- [${r.severity}] ${r.explanation || ''}`);
+      if (r.article) lines.push(`  📄 ${r.article}`);
     }
   }
   if (dash.checklist?.length) {
     lines.push('\n### Чеклист');
     for (const grp of dash.checklist) {
       lines.push(`**${grp.role}:**`);
-      for (const item of grp.items || []) lines.push(`- [ ] ${item}`);
+      for (const item of grp.items || []) lines.push(`- ${item}`);
     }
   }
   if (dash.documents?.length) {
     lines.push('\n### Документы к обновлению');
-    for (const d of dash.documents) lines.push(`• ${d}`);
+    for (const d of dash.documents) lines.push(`- ${d}`);
   }
-  return lines.join('\n') || JSON.stringify(data, null, 2);
+  return lines.join('\n');
 }
 
 
