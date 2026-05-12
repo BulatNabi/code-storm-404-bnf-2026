@@ -173,6 +173,30 @@ services:
     command: ["python", "es_indexer.py"]
     extra_hosts: *host-aliases
 
+  # ── stage 5: LangGraph agent (ai-core, FastAPI :8001) ─────────────────────
+  ai_core:
+    build:
+      context: ../ai-core
+      dockerfile: Dockerfile
+    container_name: regtech_ai_core
+    restart: unless-stopped
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      ES_URL:          "http://elasticsearch:9200"
+      ES_INDEX:        "${ES_INDEX:-regtech-docs}"
+      LLM_BASE_URL:    "${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
+      LLM_API_KEY:     "${LLM_API_KEY}"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-openai/text-embedding-3-small}"
+      EMBEDDING_DIMS:  "${EMBEDDING_DIMS:-1536}"
+      AGENT_MODEL:     "${AGENT_MODEL:-openai/gpt-4o-mini}"
+      LOG_LEVEL:       "${LOG_LEVEL:-INFO}"
+    ports:
+      - "8001:8001"
+    extra_hosts: *host-aliases
+
 volumes:
   postgres_data:
   md_converter_cache:
