@@ -29,6 +29,8 @@ import logging
 import os
 import sys
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -55,6 +57,16 @@ RULES_CONSUMER_GROUP = os.getenv("RULES_CONSUMER_GROUP", "rules-extractor")
 MD_S3_BUCKET         = os.getenv("MD_S3_BUCKET",         "regtech-md")
 POLL_TIMEOUT_MS      = int(os.getenv("RULES_POLL_TIMEOUT_MS", "10000"))
 
+# Parallel LLM calls per process. Each worker thread gets its own LLM
+# request. Tune up if your provider/quota allows.
+RULES_PARALLELISM    = int(os.getenv("RULES_PARALLELISM",    "3"))
+# How many messages to drain from Kafka per batch before waiting for the
+# batch to finish. Should be >= RULES_PARALLELISM so the pool stays full.
+RULES_BATCH_SIZE     = int(os.getenv("RULES_BATCH_SIZE",     str(RULES_PARALLELISM)))
+# Optional comma-separated source filter. Empty/unset → process every
+# source. Example: RULES_SOURCES=cbu,eurlex to skip Lex events.
+RULES_SOURCES        = {s.strip() for s in os.getenv("RULES_SOURCES", "").split(",") if s.strip()}
+
 
 @dataclass
 class RulesEvent:
@@ -75,6 +87,9 @@ class RulesExtractor:
             aws_secret_access_key=config.S3_SECRET_KEY,
             config=BotoConfig(retries={"max_attempts": 3}, signature_version="s3v4"),
         )
+        # `self.conn` is used by the main thread (e.g. _already_extracted in
+        # the smoke-test path). Worker threads use `_db()` which returns a
+        # thread-local connection so we don't share cursors across threads.
         self.conn = psycopg2.connect(
             host=config.DB_HOST, port=config.DB_PORT, dbname=config.DB_NAME,
             user=config.DB_USER, password=config.DB_PASSWORD,
@@ -87,9 +102,13 @@ class RulesExtractor:
             acks="all", retries=3,
         )
 
-        # LLM client + generator initialised lazily on first message —
-        # Yandex creds aren't strictly required to *start* the consumer.
+        # Postgres connections aren't thread-safe across cursors, so each
+        # worker thread gets its own. Built lazily inside the thread.
+        self._tls = threading.local()
+
+        # LLM client + generator initialised lazily on first message.
         self._generator: RuleGenerator | None = None
+        self._generator_lock = threading.Lock()
 
     # ── public API ──────────────────────────────────────────────────────────
 
@@ -102,31 +121,45 @@ class RulesExtractor:
             auto_offset_reset="earliest",
             value_deserializer=lambda b: json.loads(b.decode("utf-8")),
             consumer_timeout_ms=POLL_TIMEOUT_MS if once else float("inf"),
-            max_poll_records=1,
-            max_poll_interval_ms=int(os.getenv("RULES_MAX_POLL_INTERVAL_MS", "1800000")),  # 30 min
+            # Pull a full batch so the threadpool stays saturated.
+            max_poll_records=max(RULES_BATCH_SIZE, RULES_PARALLELISM),
+            max_poll_interval_ms=int(os.getenv("RULES_MAX_POLL_INTERVAL_MS", "1800000")),
             session_timeout_ms=int(os.getenv("RULES_SESSION_TIMEOUT_MS",   "60000")),
             heartbeat_interval_ms=int(os.getenv("RULES_HEARTBEAT_MS",      "10000")),
             request_timeout_ms=int(os.getenv("RULES_REQUEST_TIMEOUT_MS",   "65000")),
         )
-        logger.info("subscribed to %s (group=%s) → bucket=%s out=%s",
-                    MD_TOPIC, RULES_CONSUMER_GROUP, MD_S3_BUCKET, RULES_TOPIC)
+        logger.info("subscribed to %s (group=%s) → bucket=%s out=%s | "
+                    "parallelism=%d  sources=%s",
+                    MD_TOPIC, RULES_CONSUMER_GROUP, MD_S3_BUCKET, RULES_TOPIC,
+                    RULES_PARALLELISM,
+                    sorted(RULES_SOURCES) or "ALL")
 
         processed = 0
+        pool = ThreadPoolExecutor(
+            max_workers=RULES_PARALLELISM,
+            thread_name_prefix="rules-",
+        )
         try:
+            # Drain batches: poll the iterator, group messages into a batch,
+            # submit all to the pool, wait for them, commit, repeat. Commit
+            # only after the full batch finishes so we never advance the
+            # offset past an in-flight or failed message.
+            batch: list = []
             for msg in consumer:
-                try:
-                    if self._handle(msg.value):
-                        processed += 1
-                except Exception as exc:
-                    logger.error("error handling %s/%d/%d: %s",
-                                 msg.topic, msg.partition, msg.offset, exc, exc_info=True)
-                try:
-                    consumer.commit()
-                except CommitFailedError as exc:
-                    logger.warning("commit failed (rebalance?), retry on next poll: %s", exc)
+                batch.append(msg)
+                if len(batch) < RULES_BATCH_SIZE:
+                    continue
+                processed += self._process_batch(batch, pool)
+                self._commit(consumer)
+                batch = []
+            # Flush whatever's left when the iterator exits (--once mode or shutdown)
+            if batch:
+                processed += self._process_batch(batch, pool)
+                self._commit(consumer)
         except StopIteration:
             pass
         finally:
+            pool.shutdown(wait=True)
             try:
                 self.producer.flush(timeout=10)
             except Exception:
@@ -134,6 +167,45 @@ class RulesExtractor:
             consumer.close()
         logger.info("done. processed=%d", processed)
         return processed
+
+    def _process_batch(self, batch: list, pool: ThreadPoolExecutor) -> int:
+        """Submit every msg.value to the threadpool and wait for the whole batch
+        to finish. Returns count of successful conversions."""
+        futures = {
+            pool.submit(self._handle_safe, msg.value): msg
+            for msg in batch
+        }
+        ok = 0
+        for fut in as_completed(futures):
+            msg = futures[fut]
+            try:
+                if fut.result():
+                    ok += 1
+            except Exception as exc:
+                logger.error("worker thread crashed on %s/%d/%d: %s",
+                             msg.topic, msg.partition, msg.offset, exc, exc_info=True)
+        return ok
+
+    def _handle_safe(self, event: dict) -> bool:
+        """Wrapper around _handle that never raises — exceptions get logged
+        and recorded as `rule_extractions.status='error'`."""
+        try:
+            return self._handle(event)
+        except Exception as exc:
+            doc_id = event.get("doc_id", "?")
+            logger.error("error handling %s: %s", doc_id, exc, exc_info=True)
+            if doc_id and doc_id != "?":
+                try:
+                    self._record_error(doc_id, str(exc))
+                except Exception:
+                    pass
+            return False
+
+    def _commit(self, consumer: KafkaConsumer) -> None:
+        try:
+            consumer.commit()
+        except CommitFailedError as exc:
+            logger.warning("commit failed (rebalance?), retry on next poll: %s", exc)
 
     # ── internals ───────────────────────────────────────────────────────────
 
@@ -144,6 +216,9 @@ class RulesExtractor:
         md_hash   = event.get("md_hash", "")
         if not (doc_id and md_s3_key):
             logger.warning("skip — missing doc_id/md_s3_key in event: %r", event)
+            return False
+        if RULES_SOURCES and source not in RULES_SOURCES:
+            logger.debug("skip — source %s not in RULES_SOURCES=%s", source, RULES_SOURCES)
             return False
 
         if self._already_extracted(doc_id, md_hash):
@@ -197,9 +272,14 @@ class RulesExtractor:
         return True
 
     def _generator_lazy(self) -> RuleGenerator:
-        if self._generator is None:
+        # Per-thread RuleGenerator. AsyncOpenAI binds to whichever event loop
+        # first uses it, so we keep one client per thread to avoid the
+        # cross-loop httpx errors you'd otherwise get from asyncio.run() in
+        # a threadpool.
+        gen = getattr(self._tls, "generator", None)
+        if gen is None:
             llm = LLMClient.from_env()
-            self._generator = RuleGenerator(
+            gen = RuleGenerator(
                 llm_client=llm,
                 max_tokens=int(os.getenv("RULES_MAX_TOKENS",   "50000")),
                 chunk_size=int(os.getenv("RULES_CHUNK_SIZE",   "40000")),
@@ -207,7 +287,19 @@ class RulesExtractor:
                 temperature=float(os.getenv("RULES_TEMPERATURE", "0.0")),
                 response_max_tokens=int(os.getenv("RULES_RESPONSE_MAX", "8000")),
             )
-        return self._generator
+            self._tls.generator = gen
+        return gen
+
+    def _db(self):
+        """Per-thread psycopg connection. Each worker thread gets its own
+        connection so cursors don't get crossed."""
+        if not hasattr(self._tls, "conn") or self._tls.conn.closed:
+            self._tls.conn = psycopg2.connect(
+                host=config.DB_HOST, port=config.DB_PORT, dbname=config.DB_NAME,
+                user=config.DB_USER, password=config.DB_PASSWORD,
+            )
+            self._tls.conn.autocommit = True
+        return self._tls.conn
 
     async def _generate(self, md_path: str) -> dict:
         gen = self._generator_lazy()
@@ -215,7 +307,7 @@ class RulesExtractor:
 
     def _already_extracted(self, doc_id: str, md_hash: str) -> bool:
         """Skip if rules already extracted for this MD version."""
-        with self.conn.cursor() as cur:
+        with self._db().cursor() as cur:
             cur.execute(
                 """
                 SELECT r.status, m.md_hash
@@ -252,7 +344,7 @@ class RulesExtractor:
                 r.get("severity", "medium"),
                 json.dumps(r.get("source") or {}, ensure_ascii=False),
             ))
-        with self.conn.cursor() as cur:
+        with self._db().cursor() as cur:
             # Replace the doc's rules entirely — extraction is deterministic per (doc, md_hash).
             cur.execute("DELETE FROM public.rules WHERE doc_id = %s", (doc_id,))
             psycopg2.extras.execute_values(
@@ -269,7 +361,7 @@ class RulesExtractor:
 
     def _record_success(self, doc_id: str, rules_count: int, strategy: str,
                         llm_calls, processing_time_s) -> None:
-        with self.conn.cursor() as cur:
+        with self._db().cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO public.rule_extractions
@@ -290,7 +382,7 @@ class RulesExtractor:
             )
 
     def _record_error(self, doc_id: str, error: str) -> None:
-        with self.conn.cursor() as cur:
+        with self._db().cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO public.rule_extractions
