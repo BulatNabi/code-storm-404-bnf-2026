@@ -83,20 +83,6 @@ function ProjectDetailContent() {
   useEffect(() => { loadProject(); loadHistory(); }, [projectId]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  // Auto-fire analysis when arriving from project-creation flow with
-  // `?prompt=<...>`. Runs after history loaded so we don't double-fire.
-  const [autoFired, setAutoFired] = useState(false);
-  useEffect(() => {
-    if (autoFired || loading) return;
-    const initial = searchParams?.get('prompt');
-    if (initial && initial.trim()) {
-      setAutoFired(true);
-      setInputText(initial);
-      // Defer one tick so React state settles before handleSend reads it.
-      setTimeout(() => handleSend(initial), 50);
-    }
-  }, [loading, autoFired]);
-
   async function loadProject() {
     setLoading(true); setError('');
     try {

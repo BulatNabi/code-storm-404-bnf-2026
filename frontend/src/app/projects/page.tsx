@@ -51,11 +51,12 @@ function ProjectsContent() {
         description: newDesc,
         files: newFiles,
       });
-      // Pass description + file names into the chat as the opening user
-      // message — agent will analyze it on landing.
-      const initialMsg = [newDesc.trim(), newFiles.length ? `\n\nПрикреплено: ${newFiles.map(f => f.name).join(', ')}` : ''].join('').trim();
-      const qs = initialMsg ? `?prompt=${encodeURIComponent(initialMsg)}` : '';
-      router.push(`/projects/${project.id}${qs}`);
+      // Open the project's chat page so the user can submit feature
+      // descriptions. The project description itself is product CONTEXT
+      // (e.g. "Mobile bank for retail clients in UZ"), NOT a feature to
+      // analyze — the backend already forwards it to ai-core as the
+      // `project_description` background field on every /analyze call.
+      router.push(`/projects/${project.id}`);
     } catch (err: any) {
       setCreateError(err?.detail || t('projects.create_error_default'));
       setCreating(false);
