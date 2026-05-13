@@ -70,8 +70,12 @@ export default function Navbar({ variant }: NavbarProps) {
 
   return (
     <nav className="navbar">
-      <Link href="/" className="navbar-logo">
-        {t('nav.brand')}
+      <Link href="/" style={{ display: 'flex', alignItems: 'center' }}>
+        <img
+          src="/themis-wordmark-dark.svg"
+          alt="Logo"
+          style={{ height: 20, width: 'auto' }}
+        />
       </Link>
       <div className="navbar-actions">
         <LanguageSwitcher />

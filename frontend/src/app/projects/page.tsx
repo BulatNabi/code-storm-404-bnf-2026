@@ -143,54 +143,6 @@ function ProjectsContent() {
                 ))}
               </div>
             </div>
-
-            {/* Jira */}
-            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                  <span style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}>🔗</span>
-                  <h2 style={{ fontSize: '1.1rem' }}>{t('projects.jira_title')}</h2>
-                </div>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>{t('projects.jira_subtitle')}</p>
-              </div>
-              <div className="divider" style={{ margin: 0 }} />
-              {jiraLoading && <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>{t('projects.jira_checking')}</p>}
-              {jiraError && <div className="alert alert-error">{jiraError}</div>}
-              {jiraSuccess && <div className="alert alert-success">{jiraSuccess}</div>}
-              {!jiraLoading && jira?.connected ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  <div style={{ padding: '14px 16px', background: 'var(--success-dim)', border: '1px solid rgba(52,211,153,0.25)', borderRadius: 'var(--radius)' }}>
-                    <div style={{ color: 'var(--success)', fontWeight: 500, marginBottom: 4 }}>✓ {t('projects.jira_connected')}</div>
-                    {jira.domain && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{jira.domain}</div>}
-                    {jira.email && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{jira.email}</div>}
-                  </div>
-                  <button className="btn btn-danger" onClick={handleDisconnectJira} disabled={jiraConnecting}>
-                    {jiraConnecting ? t('projects.jira_disconnecting') : t('projects.jira_disconnect')}
-                  </button>
-                </div>
-              ) : !jiraLoading ? (
-                <form onSubmit={handleConnectJira} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  <div className="form-group">
-                    <label className="form-label">{t('projects.jira_domain')}</label>
-                    <input className="form-input" type="text" placeholder={t('projects.jira_domain_placeholder')}
-                      value={jiraForm.domain} onChange={e => setJiraForm(p => ({ ...p, domain: e.target.value }))} required />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">{t('projects.jira_email')}</label>
-                    <input className="form-input" type="email" placeholder={t('projects.jira_email_placeholder')}
-                      value={jiraForm.email} onChange={e => setJiraForm(p => ({ ...p, email: e.target.value }))} required />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">{t('projects.jira_token')}</label>
-                    <input className="form-input" type="password" placeholder={t('projects.jira_token_placeholder')}
-                      value={jiraForm.api_token} onChange={e => setJiraForm(p => ({ ...p, api_token: e.target.value }))} required />
-                  </div>
-                  <button type="submit" className="btn btn-primary" disabled={jiraConnecting}>
-                    {jiraConnecting ? t('projects.jira_connecting') : t('projects.jira_connect')}
-                  </button>
-                </form>
-              ) : null}
-            </div>
           </div>
         </div>
       </div>

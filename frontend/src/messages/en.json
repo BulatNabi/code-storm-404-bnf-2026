@@ -3,19 +3,19 @@
     "login": "Log in",
     "register": "Register",
     "logout": "Log out",
-    "brand": "FeatureAI"
+    "back_to_projects": "Back to projects"
   },
   "home": {
-    "tag": "AI-Powered Feature Analysis",
-    "title1": "Turn Jira tickets into",
-    "title2": "structured insights",
+    "tag": "AI Compliance Platform",
+    "title1": "Check the feature for risks -",
+    "title2": "before it went into production.",
     "subtitle": "Connect your Jira workspace, select an issue, and let our AI analyze feature descriptions, attachments, and requirements — delivering clear analysis in seconds.",
     "cta_primary": "Get started free",
     "cta_secondary": "Log in",
-    "pill1": "SSE Streaming",
+    "pill1": "GDPR · AML · MiCA · DORA",
     "pill2": "Jira Integration",
-    "pill3": "Analysis History",
-    "pill4": "Multi-project"
+    "pill3": "Role checklist",
+    "pill4": "RAG according to regulatory legal acts"
   },
   "login": {
     "title": "Welcome back",
@@ -34,9 +34,9 @@
     "subtitle": "Already have an account?",
     "subtitle_link": "Log in",
     "first_name": "First name",
-    "first_name_placeholder": "Alex",
+    "first_name_placeholder": "Evgenii",
     "last_name": "Last name",
-    "last_name_placeholder": "Smith",
+    "last_name_placeholder": "Petrov",
     "email": "Email",
     "email_placeholder": "you@example.com",
     "password": "Password",
@@ -48,7 +48,7 @@
   },
   "logout": {
     "title": "You've been signed out",
-    "subtitle": "Thanks for using FeatureAI. Your session has ended and your tokens have been cleared. Come back any time to continue analyzing features.",
+    "subtitle": "Thanks for using Themis. Your session has ended and your tokens have been cleared. Come back any time to continue analyzing features.",
     "btn_login": "Log back in",
     "btn_home": "Go home"
   },
@@ -121,5 +121,24 @@
     "chat_placeholder": "Describe a feature or user story… (Enter to send, Shift+Enter for new line)",
     "chat_file_hint": "PDF or DOCX · max 5 files · 10 MB each",
     "chat_error_default": "Something went wrong. Please try again."
-  }
+  },
+  "jira_status": {
+  "title": "Jira Integration",
+  "subtitle": "Manage your Jira connection",
+  "connect_title": "Connect your Jira account",
+  "connect_subtitle": "Enter your Jira credentials to get started",
+  "domain": "Jira domain",
+  "domain_placeholder": "yourcompany.atlassian.net",
+  "email": "Email",
+  "email_placeholder": "you@company.com",
+  "token": "API token",
+  "token_placeholder": "Your Jira API token",
+  "token_hint": "Generate one at atlassian.com/account/security",
+  "connect": "Connect Jira",
+  "connecting": "Connecting…",
+  "disconnect": "Disconnect Jira",
+  "disconnecting": "Disconnecting…",
+  "success_connect": "Jira connected successfully!",
+  "success_disconnect": "Jira disconnected."
+}
 }
