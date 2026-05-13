@@ -1,203 +1,148 @@
-import logging
-from typing import List
-
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-
-from app.database import get_db
-from app.dependencies import get_current_user
-from app.models import User, JiraBoard
+from fastapi import APIRouter, HTTPException, Header, Depends
 from app.schemas.jira import (
-    JiraBoardRegisterRequest, JiraBoardOut,
-    JiraIssueListResponse, JiraIssueDetail, JiraIssue, JiraAttachment,
+    JiraConnectRequest, JiraConnection, JiraIssueListResponse,
+    JiraIssueDetail, JiraImportRequest
 )
 from app.services.jira_client import JiraAPIClient
+from app.services.jira_service import JiraService
+import logging
 
-router = APIRouter(prefix="/integrations/jira", tags=["Jira Integration"])
 logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/integrations/jira", tags=["Jira Integration"])
 
+from typing import List
+from pydantic import BaseModel, Field
 
-def _get_client(board: JiraBoard) -> JiraAPIClient:
-    return JiraAPIClient(board.domain, board.email, board.api_token)
+class JiraProjectItem(BaseModel):
+    """Модель проекта/доски из Jira для Swagger-документации"""
+    key: str = Field(..., example="COD", description="Ключ проекта (используется в URL задач)")
+    name: str = Field(..., example="CodeStorm26", description="Человекочитаемое название доски")
+    id: str = Field(..., example="10000", description="Внутренний ID проекта в Jira")
 
+# Helper для получения клиента из заголовков или сессии
+def get_jira_service(
+    x_jira_domain: str = Header(...),
+    x_jira_email: str = Header(...), 
+    x_jira_token: str = Header(...)
+) -> JiraService:
+    client = JiraAPIClient(x_jira_domain, x_jira_email, x_jira_token)
+    return JiraService(client)
 
-def _get_board_or_404(board_key: str, user_id: str, db: Session) -> JiraBoard:
-    board = db.query(JiraBoard).filter(
-        JiraBoard.board_key == board_key,
-        JiraBoard.user_id == user_id,
-    ).first()
-    if not board:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail={"code": "NOT_FOUND", "message": f"Доска {board_key} не найдена"})
-    return board
+@router.get("", response_model=JiraConnection)
+async def get_jira_status(service: JiraService = Depends(get_jira_service)):
+    return await service.get_connection_status()
 
+@router.post("/connect", response_model=JiraConnection)
+async def connect_jira(body: JiraConnectRequest, service: JiraService = Depends(get_jira_service)):
+    # Здесь можно сохранить токены в зашифрованном виде в БД
+    status = await service.get_connection_status()
+    if not status.connected:
+        raise HTTPException(status_code=401, detail="Invalid Jira credentials")
+    return status
 
-@router.get("/boards", response_model=List[JiraBoardOut],
-            summary="Список зарегистрированных Jira-досок пользователя")
-def list_boards(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    boards = db.query(JiraBoard).filter(JiraBoard.user_id == current_user.id).all()
-    return [
-        JiraBoardOut(
-            id=b.id,
-            board_key=b.board_key,
-            board_name=b.board_name,
-            domain=b.domain,
-            email=b.email,
-            created_at=b.created_at.isoformat(),
-        )
-        for b in boards
-    ]
-
-
-@router.post("/boards/register", response_model=JiraBoardOut, status_code=201,
-             summary="Зарегистрировать Jira-доску (проверяет credentials и сохраняет)")
-async def register_board(
-    body: JiraBoardRegisterRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    client = JiraAPIClient(body.domain, body.email, body.api_token)
+@router.get("/issues", response_model=JiraIssueListResponse)
+async def list_jira_issues(q: str = "", service: JiraService = Depends(get_jira_service)):
     try:
-        ok = await client.verify_connection()
-        if not ok:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                                detail={"code": "INVALID_CREDENTIALS", "message": "Неверные Jira credentials"})
-        # проверяем что проект существует
-        await client._request("GET", f"/project/{body.board_key}")
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail={"code": "PROJECT_NOT_FOUND", "message": f"Проект {body.board_key} не найден в Jira"})
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
-                            detail={"code": "JIRA_ERROR", "message": "Ошибка при обращении к Jira"})
-
-    # upsert — если доска с таким ключом уже есть у юзера, обновляем credentials
-    existing = db.query(JiraBoard).filter(
-        JiraBoard.board_key == body.board_key,
-        JiraBoard.user_id == current_user.id,
-    ).first()
-
-    if existing:
-        existing.board_name = body.board_name
-        existing.domain = body.domain
-        existing.email = body.email
-        existing.api_token = body.api_token
-        board = existing
-    else:
-        board = JiraBoard(
-            user_id=current_user.id,
-            board_key=body.board_key,
-            board_name=body.board_name,
-            domain=body.domain,
-            email=body.email,
-            api_token=body.api_token,
-        )
-        db.add(board)
-
-    db.commit()
-    db.refresh(board)
-
-    return JiraBoardOut(
-        id=board.id,
-        board_key=board.board_key,
-        board_name=board.board_name,
-        domain=board.domain,
-        email=board.email,
-        created_at=board.created_at.isoformat(),
-    )
-
-
-@router.delete("/boards/{board_key}", status_code=204,
-               summary="Удалить зарегистрированную доску")
-def delete_board(
-    board_key: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    board = _get_board_or_404(board_key, current_user.id, db)
-    db.delete(board)
-    db.commit()
-    return None
-
-
-@router.get("/boards/{board_key}/issues", response_model=JiraIssueListResponse,
-            summary="Список задач доски")
-async def list_board_issues(
-    board_key: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    board = _get_board_or_404(board_key, current_user.id, db)
-    client = _get_client(board)
-    try:
-        raw = await client.search_project_issues(board_key)
+        return await service.list_issues(q)
     except Exception as e:
-        logger.error("Jira API error: %s", e)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
-                            detail={"code": "JIRA_ERROR", "message": "Не удалось получить задачи из Jira"})
+        logger.error(f"Jira API error: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch issues from Jira")
 
-    items = []
-    for issue in raw:
-        fields = issue.get("fields", {})
-        attachments = fields.get("attachment") or []
-        assignee = fields.get("assignee")
-        items.append(JiraIssue(
-            key=issue.get("key"),
-            summary=fields.get("summary", ""),
-            status=fields.get("status", {}).get("name", ""),
-            issue_type=fields.get("issuetype", {}).get("name", ""),
-            assignee=assignee.get("displayName") if assignee else None,
-            updated_at=fields.get("updated"),
-            has_attachments=len(attachments) > 0,
-        ))
-
-    return JiraIssueListResponse(items=items, total=len(items))
-
-
-@router.get("/boards/{board_key}/issues/{issue_key}", response_model=JiraIssueDetail,
-            summary="Детали задачи (описание + вложения)")
-async def get_issue(
-    board_key: str,
-    issue_key: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    board = _get_board_or_404(board_key, current_user.id, db)
-    client = _get_client(board)
+@router.get("/issues/{issue_key}", response_model=JiraIssueDetail)
+async def get_jira_issue(issue_key: str, service: JiraService = Depends(get_jira_service)):
     try:
-        raw = await client.get_issue_details(issue_key)
-    except httpx.HTTPStatusError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail={"code": "NOT_FOUND", "message": f"Задача {issue_key} не найдена"})
+        return await service.get_issue_detail(issue_key)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Issue {issue_key} not found")
 
-    fields = raw.get("fields", {})
-    description = fields.get("description") or ""
-    if isinstance(description, dict):
-        description = " ".join(
-            block.get("content", [{}])[0].get("text", "")
-            for block in description.get("content", [])
-        )
+@router.post("/issues/{issue_key}/import")
+async def import_jira_attachments(
+    issue_key: str, 
+    body: JiraImportRequest, 
+    service: JiraService = Depends(get_jira_service)
+):
+    """
+    Проксируем файлы из Jira. 
+    Возвращаем метаданные для отправки на /analyze.
+    """
+    imported = []
+    for att_id in body.attachment_ids:
+        try:
+            # В реальном сценарии здесь можно стримить файл, 
+            # а не грузить его целиком в память (bytes)
+            content = await service.client.download_attachment_content(att_id)
+            
+            imported.append({
+                "attachment_id": att_id,
+                # filename лучше получить из get_issue_detail заранее и передать в body,
+                # либо сделать лишний запрос, если критично.
+                "filename": f"{issue_key}_{att_id}.bin", 
+                "size": len(content),
+                "content_preview": content[:100].hex() # Пример: отдаем хекс-превью для анализа
+            })
+        except Exception:
+            logger.warning(f"Failed to download attachment {att_id}")
+            continue
+            
+    return {"issue_key": issue_key, "imported": imported}
 
-    attachments = [
-        JiraAttachment(
-            id=str(a.get("id")),
-            filename=a.get("filename", ""),
-            size=a.get("size", 0),
-            mime_type=a.get("mimeType", ""),
-            url=a.get("content", ""),
-        )
-        for a in (fields.get("attachment") or [])
-    ]
+@router.get(
+    "/available-projects",
+    summary="Получить список всех доступных досок (проектов) из Jira",
+    description="Возвращает проекты, к которым у пользователя есть доступ в указанном домене"
+)
+async def get_available_projects(client: JiraAPIClient = Depends(get_jira_client)):
+    """
+    1. Берёт x-jira-domain/token из заголовков
+    2. Делает запрос к Jira REST API /project
+    3. Возвращает чистый список key + name для dropdown на фронте
+    """
+    try:
+        projects = await client.get_available_projects()
+        return projects
+    except Exception as e:
+        logger.error(f"Failed to fetch Jira projects: {e}")
+        raise HTTPException(status_code=502, detail=f"Jira API error: {str(e)}")
+    
 
-    return JiraIssueDetail(
-        key=raw.get("key"),
-        summary=fields.get("summary", ""),
-        description=description,
-        status=fields.get("status", {}).get("name", ""),
-        issue_type=fields.get("issuetype", {}).get("name", ""),
-        attachments=attachments,
-    )
+@router.get(
+    "/available-projects",
+    response_model=List[JiraProjectItem],
+    tags=["Jira Integration"],
+    summary="📋 Получить список всех доступных досок из Jira",
+    description="""
+    Возвращает все проекты (Kanban/Scrum доски), к которым у пользователя есть доступ в указанном домене Jira.
+    
+    **Как используется:**
+    1. Фронтенд вызывает этот метод после ввода домена и токена.
+    2. Пользователь выбирает нужную доску из выпадающего списка.
+    3. Выбранный `key` отправляется в `/projects/register` для сохранения в БД.
+    """,
+    responses={
+        200: {
+            "description": "Успешное получение списка проектов",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {"key": "COD", "name": "CodeStorm26", "id": "10000"},
+                        {"key": "MKT", "name": "Marketing Board", "id": "10001"},
+                        {"key": "DEV", "name": "Backend Squad", "id": "10002"}
+                    ]
+                }
+            }
+        },
+        401: {"description": "Неверные учётные данные Jira"},
+        502: {"description": "Ошибка связи с Jira API или таймаут"}
+    }
+)
+async def get_available_projects(client: JiraAPIClient = Depends(get_jira_client)):
+    """
+    Делает запрос к Jira REST API /rest/api/3/project
+    и фильтрует ответ, оставляя только key, name и id.
+    """
+    try:
+        projects = await client.get_available_projects()
+        return projects
+    except Exception as e:
+        logger.error(f"Failed to fetch Jira projects: {e}")
+        raise HTTPException(status_code=502, detail=f"Jira API error: {str(e)}")

@@ -2,23 +2,29 @@ from typing import Optional, List
 from pydantic import BaseModel
 
 
-class JiraConnectRequest(BaseModel):
-    domain: str
+class JiraBoardRegisterRequest(BaseModel):
+    board_key: str      # ключ проекта в Jira, напр. "BANK"
+    board_name: str     # отображаемое имя
+    domain: str         # mycompany.atlassian.net
     email: str
     api_token: str
 
     model_config = {"json_schema_extra": {"example": {
+        "board_key": "BANK",
+        "board_name": "Мобильный банк",
         "domain": "mycompany.atlassian.net",
         "email": "user@mycompany.com",
         "api_token": "ATATT3x..."
     }}}
 
 
-class JiraConnection(BaseModel):
-    connected: bool
-    domain: Optional[str] = None
-    email: Optional[str] = None
-    connected_at: Optional[str] = None
+class JiraBoardOut(BaseModel):
+    id: str
+    board_key: str
+    board_name: str
+    domain: str
+    email: str
+    created_at: str
 
 
 class JiraIssue(BaseModel):
@@ -26,8 +32,8 @@ class JiraIssue(BaseModel):
     summary: str
     status: str
     issue_type: str
-    assignee: Optional[str]
-    updated_at: str
+    assignee: Optional[str] = None
+    updated_at: Optional[str] = None
     has_attachments: bool
 
 
@@ -51,11 +57,3 @@ class JiraIssueDetail(BaseModel):
     status: str
     issue_type: str
     attachments: List[JiraAttachment]
-
-
-class JiraImportRequest(BaseModel):
-    attachment_ids: List[str]
-
-    model_config = {"json_schema_extra": {"example": {
-        "attachment_ids": ["att-001", "att-002"]
-    }}}
