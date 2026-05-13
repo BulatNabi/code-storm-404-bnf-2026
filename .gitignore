@@ -1,55 +1,16 @@
-# === Python ===
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
 
-# === Virtual Environments ===
-.venv/
-env/
-ENV/
-venv/
+# dependencies
+node_modules/
 
-# === IDE / Editors ===
-.idea/
-.vscode/*
-!.vscode/extensions.json
-*.swp
-*.swo
-*~
+# next.js
+/.next/
+/out/
 
-# === Logs & Debug ===
-*.log
-logs/
-pytest_cache/
-.coverage
-htmlcov/
+.env*
 
-# === Environment Secrets ===
-.env
-.env.local
-*.secret
+# vercel
+.vercel
 
-# === OS / System ===
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# === Test / Build artifacts ===
-.mypy_cache/
-.pytest_cache/
+# typescript
+*.tsbuildinfo
+next-env.d.ts
