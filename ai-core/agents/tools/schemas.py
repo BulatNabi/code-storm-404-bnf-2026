@@ -61,11 +61,24 @@ class QuoteVerification(BaseModel):
 # Схемы для итогового ответа агента
 class ChecklistItem(BaseModel):
     action: str = Field(description="Конкретное действие, которое нужно выполнить")
-    role: str = Field(description="Роль (например: PO, Backend, Compliance, Frontend)")
-    rationale: str = Field(description="Обоснование, почему это нужно")
-    doc_links: List[str] = Field(default_factory=list, description="Ссылки на документы (doc_id или url)")
-    quotes: List[str] = Field(default_factory=list, description="Верифицированные цитаты из НПА")
-    compliance_metric: Optional[str] = Field(None, description="Метрика для оценки соблюдения данного правила/закона (как измерить, что оно соблюдается)")
+    role: str = Field(description="Роль: PO, Backend, Frontend, Compliance, Legal, Data, Security")
+    rationale: str = Field(description="Обоснование: какое требование закона это закрывает")
+    doc_links: List[str] = Field(default_factory=list,
+                                 description="Только doc_id из ES (например 'eurlex-32016R0679'). URL'ы и title подставляются автоматически после finalize_analysis — не выдумывай их.")
+    quotes: List[str] = Field(default_factory=list,
+                              description="Точные ПОДСТРОКИ из поля `requirement` правил, не из title. Минимум 20 символов. Каждая цитата должна найтись substring-матчем в исходном документе.")
+    compliance_metric: Optional[str] = Field(None,
+                                             description="Измеримый критерий проверки (например: '100% запросов имеют consent=true в логах', 'DPIA проведена и подписана DPO')")
+
+
+# Reference добавляется ПОСЛЕ работы агента — серверный enrichment по
+# doc_id из ES (см. _enrich_report_with_urls в main.py). LLM это поле НЕ
+# заполняет; оно появляется в финальном JSON, который видит фронт.
+class DocReference(BaseModel):
+    doc_id:     str
+    title:      Optional[str] = None
+    source:     Optional[str] = None       # cbu | lex | eurlex
+    source_url: Optional[str] = None
 
 class RegulatoryDomainResult(BaseModel):
     domain: str = Field(description="Затронутая регуляторная область (тег)")
@@ -75,9 +88,20 @@ class RegulatoryDomainResult(BaseModel):
     checklist: List[ChecklistItem] = Field(description="Чек-лист для этой области")
 
 class FinalReport(BaseModel):
-    feature_summary: str = Field(description="Краткое резюме фичи, как её понял агент")
-    overall_risk: Severity = Field(description="Общий максимальный уровень риска")
-    jira_comment_summary: str = Field(description="Готовый, сжатый markdown-комментарий для вставки в Jira-тикет, содержащий выжимку рисков и ToDo для разработчиков")
-    domains: List[RegulatoryDomainResult] = Field(description="Затронутые домены с чеклистами")
-    documents_to_update: List[str] = Field(description="Внутренние документы (Оферта, Политика и т.д.), которые возможно придется обновить")
-    red_flags: List[str] = Field(default_factory=list, description="Критические риски, требующие немедленного внимания (если есть)")
+    feature_summary: str = Field(description="Краткое резюме фичи (1-2 предложения), как её понял агент. Должно содержать предмет фичи и какие сущности/данные затрагиваются.")
+    overall_risk: Severity = Field(description="Общий максимальный уровень риска по всем доменам")
+    jira_comment_summary: str = Field(description=(
+        "Markdown-комментарий для Jira-тикета строго по шаблону:\n"
+        "## Compliance Review — <severity>\n"
+        "**TL;DR:** <1 предложение про главный риск>\n\n"
+        "**Затронутые области:** <список доменов>\n\n"
+        "**ToDo:**\n- [ ] <action 1> (<role>)\n- [ ] <action 2> (<role>)\n...\n\n"
+        "**Документы к обновлению:** <список>"
+    ))
+    domains: List[RegulatoryDomainResult] = Field(description=(
+        "Затронутые регуляторные области. ОБЯЗАТЕЛЬНО проверь несколько "
+        "областей — практически любая фича финтеха затрагивает 2-4 "
+        "домена. Один domain = одна область регулирования."
+    ))
+    documents_to_update: List[str] = Field(description="Внутренние документы (Оферта, Privacy Policy, ROPA, DPIA, User Agreement, Terms of Service и т.д.), которые потребуется обновить с релизом")
+    red_flags: List[str] = Field(default_factory=list, description="Критические блокеры — то, без чего релизить НЕЛЬЗЯ")

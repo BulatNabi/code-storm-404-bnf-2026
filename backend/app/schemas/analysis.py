@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 from pydantic import BaseModel
 
 
@@ -31,6 +31,11 @@ class Dashboard(BaseModel):
 class AnalyzeResponse(BaseModel):
     analysis_id: str
     dashboard: Dashboard
+    # Full FinalReport from ai-core (with domains, checklist items,
+    # rationales, compliance metrics, red flags, jira summary). Free-form
+    # dict to avoid breaking when ai-core schema evolves.
+    report: Optional[Dict[str, Any]] = None
+    summary: Optional[str] = None
 
 
 class AnalysisHistoryItem(BaseModel):
@@ -52,4 +57,6 @@ class AnalysisOut(BaseModel):
     text: str
     jira_issue_key: Optional[str]
     dashboard: Dashboard
+    report: Optional[Dict[str, Any]] = None
+    summary: Optional[str] = None
     created_at: str

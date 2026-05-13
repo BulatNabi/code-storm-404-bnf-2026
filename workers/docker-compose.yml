@@ -1,0 +1,203 @@
+version: "3.9"
+
+# Per-worker containers — every stage of the pipeline can be started/stopped
+# independently. They all reach the host-side infra (Kafka, MinIO, Postgres)
+# via `host.docker.internal`. Elasticsearch is the only stage that runs
+# inside this compose, so workers point at it by service name.
+#
+# Profiles:
+#   • bootstrap — Postgres for a greenfield setup (skip if regtech_postgres is
+#                 already running on the host).
+#   • scrapers  — three site-scrapers (cbu/lex/eurlex), opt-in because they
+#                 take hours to drain a full classifier and you usually only
+#                 want one running at a time.
+#
+# Typical lifecycle:
+#     docker compose build elasticsearch md_converter rules_extractor es_indexer
+#     docker compose up    -d elasticsearch
+#     docker compose up    -d md_converter rules_extractor es_indexer
+#     docker compose --profile scrapers up -d cbu_worker
+#     docker compose logs  -f es_indexer
+#     docker compose stop  rules_extractor
+#
+# Credentials live in `workers/.env` (gitignored). Each worker pulls them via
+# `env_file: .env`; the explicit `environment:` keys then override the host-
+# only URLs (S3_ENDPOINT_URL, DB_HOST, etc.) so the container reaches the
+# right hostnames.
+
+# ── reusable building blocks ────────────────────────────────────────────────
+x-shared-env: &shared-env
+  S3_ENDPOINT_URL:         "http://host.docker.internal:9010"
+  S3_BUCKET:               "regtech-docs"
+  S3_ACCESS_KEY:           "regtech"
+  S3_SECRET_KEY:           "regtech_secret123"
+  S3_PREFIX:               "raw-docs"
+  MD_S3_BUCKET:            "regtech-md"
+  KAFKA_BOOTSTRAP_SERVERS: "host.docker.internal:9094"
+  DB_HOST:                 "host.docker.internal"
+  DB_PORT:                 "5435"
+  DB_NAME:                 "regtech"
+  DB_USER:                 "regtech"
+  DB_PASSWORD:             "regtech_secret"
+  LOG_LEVEL:               "INFO"
+
+x-host-aliases: &host-aliases
+  - "host.docker.internal:host-gateway"
+
+# ── services ────────────────────────────────────────────────────────────────
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: regtech_postgres
+    restart: unless-stopped
+    profiles: ["bootstrap"]   # ← does not start by default; opt-in via --profile bootstrap
+    environment:
+      POSTGRES_DB: regtech
+      POSTGRES_USER: regtech
+      POSTGRES_PASSWORD: regtech_secret
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U regtech -d regtech"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── stage 1: site scrapers ───────────────────────────────────────────────
+  # Each scraper runs `run_all.py --worker <name>` which loops on the
+  # configured schedule. Profile `scrapers` keeps them opt-in.
+  cbu_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+    container_name: regtech_cbu_worker
+    restart: unless-stopped
+    profiles: ["scrapers"]
+    env_file: .env
+    environment: *shared-env
+    command: ["python", "run_all.py", "--worker", "cbu"]
+    extra_hosts: *host-aliases
+
+  lex_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+    container_name: regtech_lex_worker
+    restart: unless-stopped
+    profiles: ["scrapers"]
+    env_file: .env
+    environment: *shared-env
+    command: ["python", "run_all.py", "--worker", "lex"]
+    extra_hosts: *host-aliases
+
+  eurlex_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+    container_name: regtech_eurlex_worker
+    restart: unless-stopped
+    profiles: ["scrapers"]
+    env_file: .env
+    environment: *shared-env
+    command: ["python", "run_all.py", "--worker", "eurlex"]
+    extra_hosts: *host-aliases
+
+  # ── stage 2: HTML/PDF → Markdown ─────────────────────────────────────────
+  md_converter:
+    build:
+      context: .
+      dockerfile: Dockerfile.md_converter
+    container_name: regtech_md_converter
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *shared-env
+      HF_HOME: /cache/huggingface
+    volumes:
+      - md_converter_cache:/cache/huggingface
+    extra_hosts: *host-aliases
+
+  # ── stage 3: LLM rule extraction (reg.md → public.rules) ─────────────────
+  rules_extractor:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: regtech_rules_extractor
+    restart: unless-stopped
+    env_file: .env
+    environment: *shared-env
+    command: ["python", "rules_extractor.py"]
+    extra_hosts: *host-aliases
+
+  # ── stage 4: Elasticsearch + indexer (rules → search) ────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: regtech_elasticsearch
+    restart: unless-stopped
+    environment:
+      discovery.type:            single-node
+      xpack.security.enabled:    "false"
+      ES_JAVA_OPTS:              "-Xms1g -Xmx1g"
+      ingest.geoip.downloader.enabled: "false"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  es_indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: regtech_es_indexer
+    restart: unless-stopped
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      <<: *shared-env
+      # Inside the compose network ES is reachable by service name.
+      ES_URL: "http://elasticsearch:9200"
+    command: ["python", "es_indexer.py"]
+    extra_hosts: *host-aliases
+
+  # ── stage 5: LangGraph agent (ai-core, FastAPI :8001) ─────────────────────
+  ai_core:
+    build:
+      context: ../ai-core
+      dockerfile: Dockerfile
+    container_name: regtech_ai_core
+    restart: unless-stopped
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      ES_URL:          "http://elasticsearch:9200"
+      ES_INDEX:        "${ES_INDEX:-regtech-docs}"
+      LLM_BASE_URL:    "${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
+      LLM_API_KEY:     "${LLM_API_KEY}"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-openai/text-embedding-3-small}"
+      EMBEDDING_DIMS:  "${EMBEDDING_DIMS:-1536}"
+      AGENT_MODEL:     "${AGENT_MODEL:-google/gemini-3.1-flash-lite-preview}"
+      LOG_LEVEL:       "${LOG_LEVEL:-INFO}"
+    ports:
+      - "8001:8001"
+    extra_hosts: *host-aliases
+
+volumes:
+  postgres_data:
+  md_converter_cache:
+  elasticsearch_data:

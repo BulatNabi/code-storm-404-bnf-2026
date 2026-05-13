@@ -97,8 +97,12 @@ async def analyze(
     ai_response = await _call_ai(project, text)
     dashboard = ai_response.get("dashboard", _STUB_DASHBOARD)
     summary = ai_response.get("summary")
+    report = ai_response.get("report")     # full FinalReport — pass-through
 
-    result_json = json.dumps({"dashboard": dashboard, "summary": summary}, ensure_ascii=False)
+    result_json = json.dumps(
+        {"dashboard": dashboard, "summary": summary, "report": report},
+        ensure_ascii=False,
+    )
 
     analysis = Analysis(
         project_id=project_id,
@@ -123,7 +127,12 @@ async def analyze(
             except Exception as e:
                 logger.warning("Failed to post Jira comment: %s", e)
 
-    return AnalyzeResponse(analysis_id=analysis.id, dashboard=dashboard)
+    return AnalyzeResponse(
+        analysis_id=analysis.id,
+        dashboard=dashboard,
+        report=report,
+        summary=summary,
+    )
 
 
 @router.get("/{project_id}/history", response_model=AnalysisHistoryResponse,
@@ -189,5 +198,7 @@ def get_analysis(
         text=analysis.text,
         jira_issue_key=analysis.jira_issue_key,
         dashboard=dashboard,
+        report=result.get("report"),
+        summary=result.get("summary"),
         created_at=analysis.created_at.isoformat(),
     )

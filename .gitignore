@@ -1,16 +1,57 @@
+# === Python ===
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+/lib/
+/lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# dependencies
-node_modules/
-
-# next.js
-/.next/
-/out/
-
+# === Environment Secrets ===
+.env
 .env*
+.env.local
+*.secret
+workers/.env
+workers/.venv/
+backend/.env
+ai-core/.env
+frontend/.env*.local
 
-# vercel
+# === OS / System ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Test / Build artifacts ===
+.mypy_cache/
+.pytest_cache/
+
+# === Node / Next.js ===
+node_modules/
+.next/
+/out/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/dist/
+
+# === Vercel ===
 .vercel
 
-# typescript
+# === TypeScript ===
 *.tsbuildinfo
 next-env.d.ts
