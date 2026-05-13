@@ -82,6 +82,24 @@ function ProjectsContent() {
             <p style={{ color: 'var(--text-muted)' }}>{t('projects.subtitle')}</p>
           </div>
 
+          <div style={{ marginBottom: 24 }}>
+              <Link href="/integrations/jira" 
+              style={{ textDecoration: 'none', display: 'inline-block', width: '320px' }}>
+                <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 20, cursor: 'pointer' }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'}
+                >
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                      <span style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}>🔗</span>
+                      <h2 style={{ fontSize: '1.1rem' }}>{t('projects.jira_title')}</h2>
+                    </div>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>{t('projects.jira_subtitle')}</p>
+                  </div>
+                </div>
+              </Link>
+            </div>
+
           <div className="grid-3">
             {/* Create */}
             <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
