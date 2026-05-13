@@ -10,9 +10,18 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/integrations/jira", tags=["Jira Integration"])
 
+from typing import List
+from pydantic import BaseModel, Field
+
+class JiraProjectItem(BaseModel):
+    """Модель проекта/доски из Jira для Swagger-документации"""
+    key: str = Field(..., example="COD", description="Ключ проекта (используется в URL задач)")
+    name: str = Field(..., example="CodeStorm26", description="Человекочитаемое название доски")
+    id: str = Field(..., example="10000", description="Внутренний ID проекта в Jira")
+
 # Helper для получения клиента из заголовков или сессии
 def get_jira_service(
-    x_jira_domain: str = Header(...), 
+    x_jira_domain: str = Header(...),
     x_jira_email: str = Header(...), 
     x_jira_token: str = Header(...)
 ) -> JiraService:
@@ -76,3 +85,64 @@ async def import_jira_attachments(
             continue
             
     return {"issue_key": issue_key, "imported": imported}
+
+@router.get(
+    "/available-projects",
+    summary="Получить список всех доступных досок (проектов) из Jira",
+    description="Возвращает проекты, к которым у пользователя есть доступ в указанном домене"
+)
+async def get_available_projects(client: JiraAPIClient = Depends(get_jira_client)):
+    """
+    1. Берёт x-jira-domain/token из заголовков
+    2. Делает запрос к Jira REST API /project
+    3. Возвращает чистый список key + name для dropdown на фронте
+    """
+    try:
+        projects = await client.get_available_projects()
+        return projects
+    except Exception as e:
+        logger.error(f"Failed to fetch Jira projects: {e}")
+        raise HTTPException(status_code=502, detail=f"Jira API error: {str(e)}")
+    
+
+@router.get(
+    "/available-projects",
+    response_model=List[JiraProjectItem],
+    tags=["Jira Integration"],
+    summary="📋 Получить список всех доступных досок из Jira",
+    description="""
+    Возвращает все проекты (Kanban/Scrum доски), к которым у пользователя есть доступ в указанном домене Jira.
+    
+    **Как используется:**
+    1. Фронтенд вызывает этот метод после ввода домена и токена.
+    2. Пользователь выбирает нужную доску из выпадающего списка.
+    3. Выбранный `key` отправляется в `/projects/register` для сохранения в БД.
+    """,
+    responses={
+        200: {
+            "description": "Успешное получение списка проектов",
+            "content": {
+                "application/json": {
+                    "example": [
+                        {"key": "COD", "name": "CodeStorm26", "id": "10000"},
+                        {"key": "MKT", "name": "Marketing Board", "id": "10001"},
+                        {"key": "DEV", "name": "Backend Squad", "id": "10002"}
+                    ]
+                }
+            }
+        },
+        401: {"description": "Неверные учётные данные Jira"},
+        502: {"description": "Ошибка связи с Jira API или таймаут"}
+    }
+)
+async def get_available_projects(client: JiraAPIClient = Depends(get_jira_client)):
+    """
+    Делает запрос к Jira REST API /rest/api/3/project
+    и фильтрует ответ, оставляя только key, name и id.
+    """
+    try:
+        projects = await client.get_available_projects()
+        return projects
+    except Exception as e:
+        logger.error(f"Failed to fetch Jira projects: {e}")
+        raise HTTPException(status_code=502, detail=f"Jira API error: {str(e)}")

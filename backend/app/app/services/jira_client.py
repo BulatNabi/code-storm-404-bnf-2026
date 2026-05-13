@@ -19,6 +19,19 @@ class JiraAPIClient:
         # Таймауты важны для stability в embedded/startup проектах
         self.timeout = httpx.Timeout(30.0)
 
+    async def get_available_projects(self) -> list[dict]:
+        """
+        Получает все проекты (доски), доступные пользователю в данном домене Jira.
+        Использует endpoint /rest/api/3/project
+        """
+        resp = await self._request("GET", "/project")
+        # Jira возвращает список объектов, нам нужны только key, name, id
+        return [
+            {"key": p["key"], "name": p["name"], "id": p["id"]}
+            for p in resp if p.get("key") and p.get("name")
+        ]
+
+
     async def _request(self, method: str, endpoint: str, **kwargs):
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.request(
