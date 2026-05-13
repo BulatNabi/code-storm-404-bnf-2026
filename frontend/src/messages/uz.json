@@ -3,19 +3,19 @@
     "login": "Kirish",
     "register": "Ro'yxatdan o'tish",
     "logout": "Chiqish",
-    "brand": "FeatureAI"
+    "back_to_projects": "Loyihalarga qaytish"
   },
   "home": {
-    "tag": "Sun'iy intellekt yordamida xususiyat tahlili",
-    "title1": "Jira vazifalarini",
-    "title2": "tuzilgan tahlilga aylantiring",
-    "subtitle": "Jira ish maydoningizni ulang, muammoni tanlang va sun'iy intellektimiz xususiyat tavsiflarini, ilovalarni va talablarni tahlil qilsin — soniyalar ichida aniq natija.",
+    "tag": "AI Compliance Platform",
+    "title1": "Xususiyatni xatarlarga tekshiring —",
+    "title2": "ishga tushirishdan oldin.",
+    "subtitle": "Xususiyatni tasvirlab bering yoki Jira'dan vazifa tanlang — Themis GDPR, AML, MiCA, PDPL bo'yicha buzilishlarni aniqlaydi va PO, Compliance hamda Engineering uchun tekshiruv ro'yxatini soniyalar ichida tuzadi.",
     "cta_primary": "Bepul boshlash",
     "cta_secondary": "Kirish",
-    "pill1": "SSE oqimi",
+    "pill1": "GDPR · AML · MiCA · DORA",
     "pill2": "Jira integratsiyasi",
-    "pill3": "Tahlil tarixi",
-    "pill4": "Ko'p loyiha"
+    "pill3": "Rollar bo'yicha tekshiruv",
+    "pill4": "NPA bo'yicha RAG"
   },
   "login": {
     "title": "Xush kelibsiz",
@@ -34,9 +34,9 @@
     "subtitle": "Hisobingiz bormi?",
     "subtitle_link": "Kirish",
     "first_name": "Ism",
-    "first_name_placeholder": "Alex",
+    "first_name_placeholder": "Evgenii",
     "last_name": "Familiya",
-    "last_name_placeholder": "Smit",
+    "last_name_placeholder": "Petrov",
     "email": "Email",
     "email_placeholder": "siz@example.com",
     "password": "Parol",
@@ -48,7 +48,7 @@
   },
   "logout": {
     "title": "Tizimdan chiqdingiz",
-    "subtitle": "FeatureAI dan foydalanganingiz uchun rahmat. Sessiyangiz tugadi va tokenlar tozalandi. Istalgan vaqt qaytib keling.",
+    "subtitle": "Themis dan foydalanganingiz uchun rahmat. Sessiyangiz tugadi va tokenlar tozalandi. Istalgan vaqt qaytib keling.",
     "btn_login": "Qayta kirish",
     "btn_home": "Bosh sahifa"
   },
@@ -121,5 +121,24 @@
     "chat_placeholder": "Xususiyat yoki foydalanuvchi hikoyasini tavsiflang… (Enter — yuborish, Shift+Enter — yangi qator)",
     "chat_file_hint": "PDF yoki DOCX · max 5 ta fayl · 10 MB gacha",
     "chat_error_default": "Nimadir noto'g'ri ketdi. Qayta urinib ko'ring."
-  }
+  },
+  "jira_status": {
+  "title": "Jira integratsiyasi",
+  "subtitle": "Jira ulanishini boshqarish",
+  "connect_title": "Jira hisobingizni ulash",
+  "connect_subtitle": "Boshlash uchun Jira ma'lumotlarini kiriting",
+  "domain": "Jira domeni",
+  "domain_placeholder": "yourcompany.atlassian.net",
+  "email": "Elektron pochta",
+  "email_placeholder": "you@company.com",
+  "token": "API token",
+  "token_placeholder": "Jira API tokeningiz",
+  "token_hint": "atlassian.com/account/security da yarating",
+  "connect": "Jira ni ulash",
+  "connecting": "Ulanmoqda…",
+  "disconnect": "Jira ni uzish",
+  "disconnecting": "Uzilmoqda…",
+  "success_connect": "Jira muvaffaqiyatli ulandi!",
+  "success_disconnect": "Jira uzildi."
+}
 }

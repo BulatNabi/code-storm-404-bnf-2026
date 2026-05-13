@@ -3,19 +3,19 @@
     "login": "Войти",
     "register": "Регистрация",
     "logout": "Выйти",
-    "brand": "FeatureAI"
+    "back_to_projects": "Назад к проектам"
   },
   "home": {
-    "tag": "ИИ-анализ фич",
-    "title1": "Превратите задачи Jira в",
-    "title2": "структурированные выводы",
-    "subtitle": "Подключите рабочее пространство Jira, выберите задачу и позвольте нашему ИИ проанализировать описания фич, вложения и требования — чёткий анализ за секунды.",
+    "tag": "AI Compliance Platform",
+    "title1": "Проверьте фичу на риски —",
+    "title2": "до того, как она ушла в прод.",
+    "subtitle": "Опишите фичу или выберите таску из Jira — Themis найдёт нарушения по GDPR, AML, MiCA, PDPL и сформирует чеклист для PO, Compliance и Engineering за секунды.",
     "cta_primary": "Начать бесплатно",
     "cta_secondary": "Войти",
-    "pill1": "SSE-поток",
+    "pill1": "GDPR · AML · MiCA · DORA",
     "pill2": "Интеграция Jira",
-    "pill3": "История анализов",
-    "pill4": "Мультипроект"
+    "pill3": "Чеклист по ролям",
+    "pill4": "RAG по НПА"
   },
   "login": {
     "title": "С возвращением",
@@ -34,9 +34,9 @@
     "subtitle": "Уже есть аккаунт?",
     "subtitle_link": "Войти",
     "first_name": "Имя",
-    "first_name_placeholder": "Алекс",
+    "first_name_placeholder": "Евгений",
     "last_name": "Фамилия",
-    "last_name_placeholder": "Смит",
+    "last_name_placeholder": "Петров",
     "email": "Email",
     "email_placeholder": "вы@example.com",
     "password": "Пароль",
@@ -48,7 +48,7 @@
   },
   "logout": {
     "title": "Вы вышли из системы",
-    "subtitle": "Спасибо за использование FeatureAI. Ваша сессия завершена и токены очищены. Возвращайтесь в любое время.",
+    "subtitle": "Спасибо за использование Themis. Ваша сессия завершена и токены очищены. Возвращайтесь в любое время.",
     "btn_login": "Войти снова",
     "btn_home": "На главную"
   },
@@ -69,7 +69,7 @@
     "select_loading": "Загрузка проектов…",
     "select_empty": "Проектов пока нет. Создайте первый.",
     "jira_title": "Интеграция Jira",
-    "jira_subtitle": "Подключите рабочее пространство Jira",
+    "jira_subtitle": "Подключите инженерное пространство Jira",
     "jira_checking": "Проверка статуса…",
     "jira_connected": "Подключено",
     "jira_disconnect": "Отключить Jira",
@@ -121,5 +121,24 @@
     "chat_placeholder": "Опишите фичу или пользовательскую историю… (Enter — отправить, Shift+Enter — новая строка)",
     "chat_file_hint": "PDF или DOCX · до 5 файлов · по 10 МБ",
     "chat_error_default": "Что-то пошло не так. Попробуйте ещё раз."
-  }
+  },
+  "jira_status": {
+  "title": "Интеграция Jira",
+  "subtitle": "Управление подключением Jira",
+  "connect_title": "Подключите аккаунт Jira",
+  "connect_subtitle": "Введите учётные данные для начала работы",
+  "domain": "Домен Jira",
+  "domain_placeholder": "yourcompany.atlassian.net",
+  "email": "Эл. почта",
+  "email_placeholder": "you@company.com",
+  "token": "API-токен",
+  "token_placeholder": "Ваш API-токен Jira",
+  "token_hint": "Создайте на atlassian.com/account/security",
+  "connect": "Подключить Jira",
+  "connecting": "Подключение…",
+  "disconnect": "Отключить Jira",
+  "disconnecting": "Отключение…",
+  "success_connect": "Jira успешно подключена!",
+  "success_disconnect": "Jira отключена."
+}
 }

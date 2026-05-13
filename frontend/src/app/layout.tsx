@@ -4,8 +4,8 @@ import { AuthProvider } from '@/lib/auth-context';
 import { LangProvider } from '@/lib/lang-context';
 
 export const metadata: Metadata = {
-  title: 'FeatureAI — Intelligent Feature Analysis',
-  description: 'Analyze features with AI, powered by Jira integration',
+  title: 'Themis',
+  description: 'AI Compliance Platform',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

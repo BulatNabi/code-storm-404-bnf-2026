@@ -1,16 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import Navbar from '@/components/Navbar';
 import AuthGuard from '@/components/AuthGuard';
-import {
-  apiGetProject, apiUpdateProject, apiDeleteProject,
-  apiAnalyzeFeature, apiGetAnalysisHistory, apiGetAnalysis,
-} from '@/lib/api';
+import { apiGetProject, apiUpdateProject, apiDeleteProject, apiAnalyzeFeature } from '@/lib/api';
 import { useLang } from '@/lib/lang-context';
 
 interface Project { id: string; name: string; description?: string; created_at?: string; }
@@ -20,167 +15,9 @@ export default function ProjectDetailPage() {
   return <AuthGuard><ProjectDetailContent /></AuthGuard>;
 }
 
-// Severity badges: 1-char emoji + Russian label. Driven from the
-// FinalReport's `risk_level` / `severity` strings.
-const SEVERITY = {
-  critical: { mark: '🔴', label: 'Критический' },
-  high:     { mark: '🟠', label: 'Высокий'     },
-  medium:   { mark: '🟡', label: 'Средний'     },
-  low:      { mark: '🟢', label: 'Низкий'      },
-} as const;
-
-const TAG_LABEL: Record<string, string> = {
-  personal_data:       'Персональные данные / GDPR',
-  aml_cft:             'AML / CFT (Anti-Money Laundering)',
-  kyc:                 'KYC (Know Your Customer)',
-  payments:            'Платежи / PSD2',
-  ai_scoring:          'AI / Скоринг',
-  cybersecurity:       'Кибербезопасность',
-  consumer_protection: 'Защита прав потребителей',
-  crypto:              'Криптоактивы / MiCA',
-  reporting:           'Отчётность',
-  data_protection:     'Защита данных',
-};
-
-function humanize(tag: string): string {
-  return TAG_LABEL[tag] || tag.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
-// Build a complete, structured compliance report from a FinalReport.
-// The /analyze endpoint returns BOTH a thin `dashboard` (legacy UI) and
-// the full `report` (FinalReport schema with all fields). We use the
-// rich `report` whenever available and fall back to dashboard for older
-// records.
-function formatDashboardAsChat(data: any): string {
-  const rep = data?.report || {};
-  if (!rep || !rep.domains) {
-    return formatLegacy(data?.dashboard || {});
-  }
-
-  const sev = (k: string) => SEVERITY[k as keyof typeof SEVERITY] || { mark: '⚪', label: k };
-  const lines: string[] = [];
-
-  // ── HEADER ─────────────────────────────────────────────────────────
-  const overall = sev(rep.overall_risk || 'medium');
-  lines.push(`# 📋 Compliance Report — ${overall.mark} ${overall.label} risk`);
-  if (rep.feature_summary) {
-    lines.push('');
-    lines.push(`**Что анализируем:** ${rep.feature_summary}`);
-  }
-
-  // ── RED FLAGS (top, before details) ────────────────────────────────
-  if (rep.red_flags?.length) {
-    lines.push('');
-    lines.push('## 🚨 Red Flags — блокеры релиза');
-    for (const rf of rep.red_flags) lines.push(`> ⛔ ${rf}`);
-  }
-
-  // ── DOMAINS ────────────────────────────────────────────────────────
-  if (rep.domains?.length) {
-    lines.push('');
-    lines.push(`## 🎯 Затронутые регуляторные области (${rep.domains.length})`);
-    for (const dom of rep.domains) {
-      const ds = sev(dom.risk_level || 'medium');
-      lines.push('');
-      lines.push(`### ${ds.mark} ${humanize(dom.domain || '')} — ${ds.label}`);
-      if (dom.reasoning) {
-        lines.push('');
-        lines.push(`**Почему затронута:** ${dom.reasoning}`);
-      }
-      if (dom.risk_assessment_details) {
-        lines.push('');
-        lines.push(`**Последствия несоблюдения:** ${dom.risk_assessment_details}`);
-      }
-
-      if (dom.checklist?.length) {
-        lines.push('');
-        lines.push(`**Чеклист действий (${dom.checklist.length}):**`);
-        for (const [i, item] of (dom.checklist as any[]).entries()) {
-          lines.push('');
-          lines.push(`**${i + 1}. ${item.action || ''}**`);
-          if (item.role) lines.push(`   - 👤 Ответственный: \`${item.role}\``);
-          if (item.rationale) lines.push(`   - 💡 Обоснование: ${item.rationale}`);
-          if (item.compliance_metric) lines.push(`   - 📊 Метрика проверки: ${item.compliance_metric}`);
-          // Prefer the server-enriched `references` (with source_url + title);
-          // fall back to bare doc_ids for older history records.
-          const refs = item.references || (item.doc_links || []).map((d: string) => ({ doc_id: d, title: d, source_url: null }));
-          if (refs.length) {
-            const parts = refs.map((r: any) => {
-              const label = r.title && r.title !== r.doc_id
-                ? `${r.title.slice(0, 80)}${r.title.length > 80 ? '…' : ''}`
-                : r.doc_id;
-              return r.source_url ? `[${label}](${r.source_url})` : `\`${r.doc_id}\``;
-            }).join(' · ');
-            lines.push(`   - 📎 Источник: ${parts}`);
-          }
-          if (item.quotes?.length) {
-            for (const q of item.quotes) lines.push(`   - 💬 *«${q}»*`);
-          }
-        }
-      }
-    }
-  } else {
-    lines.push('');
-    lines.push('_Регуляторных рисков не обнаружено в индексе. Рекомендуется консультация с DPO/Compliance._');
-  }
-
-  // ── INTERNAL DOCS ──────────────────────────────────────────────────
-  if (rep.documents_to_update?.length) {
-    lines.push('');
-    lines.push('## 📄 Внутренние документы к обновлению');
-    for (const d of rep.documents_to_update) lines.push(`- ${d}`);
-  }
-
-  // ── JIRA-READY MARKDOWN BLOCK ──────────────────────────────────────
-  if (rep.jira_comment_summary) {
-    lines.push('');
-    lines.push('---');
-    lines.push('');
-    lines.push('## 🎫 Готовый комментарий для Jira');
-    lines.push('');
-    lines.push('```markdown');
-    lines.push(String(rep.jira_comment_summary));
-    lines.push('```');
-  }
-
-  return lines.join('\n');
-}
-
-
-function formatLegacy(dash: any): string {
-  // Fallback for old history records that only have dashboard, no
-  // full FinalReport.
-  const lines: string[] = [];
-  if (dash.zones?.length) {
-    lines.push('### Затронутые области');
-    for (const z of dash.zones) lines.push(`- **${z.label || z.id}** — ${z.severity}`);
-  }
-  if (dash.risks?.length) {
-    lines.push('\n### Риски');
-    for (const r of dash.risks) {
-      lines.push(`- [${r.severity}] ${r.explanation || ''}`);
-      if (r.article) lines.push(`  📄 ${r.article}`);
-    }
-  }
-  if (dash.checklist?.length) {
-    lines.push('\n### Чеклист');
-    for (const grp of dash.checklist) {
-      lines.push(`**${grp.role}:**`);
-      for (const item of grp.items || []) lines.push(`- ${item}`);
-    }
-  }
-  if (dash.documents?.length) {
-    lines.push('\n### Документы к обновлению');
-    for (const d of dash.documents) lines.push(`- ${d}`);
-  }
-  return lines.join('\n');
-}
-
-
 function ProjectDetailContent() {
   const params = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { t } = useLang();
   const projectId = params.project_id as string;
 
@@ -206,7 +43,7 @@ function ProjectDetailContent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => { loadProject(); loadHistory(); }, [projectId]);
+  useEffect(() => { loadProject(); }, [projectId]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   async function loadProject() {
@@ -216,26 +53,6 @@ function ProjectDetailContent() {
       setProject(data); setUpdateName(data.name); setUpdateDesc(data.description || '');
     } catch (err: any) { setError(err?.detail || 'Failed to load project.'); }
     finally { setLoading(false); }
-  }
-
-  // Load prior analyses from backend → render as a chat-style history.
-  async function loadHistory() {
-    try {
-      const hist = await apiGetAnalysisHistory(projectId, 20, 0);
-      const items = hist?.items || [];
-      if (!items.length) return;
-      // History is newest-first; flip to chronological for chat replay.
-      items.reverse();
-      const past: Message[] = [];
-      for (const it of items) {
-        past.push({ role: 'user', content: it.text_preview || '' });
-        try {
-          const full = await apiGetAnalysis(projectId, it.id);
-          past.push({ role: 'agent', content: formatDashboardAsChat(full), streaming: false });
-        } catch { /* skip broken record */ }
-      }
-      setMessages(prev => [...past, ...prev]);
-    } catch { /* silently ignore — history is optional */ }
   }
 
   async function handleUpdate(e: React.FormEvent) {
@@ -272,20 +89,46 @@ function ProjectDetailContent() {
     });
   }
 
-  async function handleSend(forced?: string) {
-    const text = (forced ?? inputText).trim();
+  async function handleSend() {
+    const text = inputText.trim();
     if (!text && attachedFiles.length === 0) return;
     if (isStreaming) return;
     const fileNames = attachedFiles.map(f => f.name);
     setMessages(prev => [...prev, { role: 'user', content: text, files: fileNames.length ? fileNames : undefined }]);
+    let filesBase64: string[] | undefined;
+    if (attachedFiles.length > 0) filesBase64 = await Promise.all(attachedFiles.map(fileToBase64));
     setInputText(''); setAttachedFiles([]); setIsStreaming(true);
     setMessages(prev => [...prev, { role: 'agent', content: '', streaming: true }]);
     try {
-      // Synchronous analyze — backend POST /api/projects/{id}/analyze is
-      // multipart Form and returns the full {analysis_id, dashboard} once
-      // the agent finishes (~10-25s on gpt-4o-mini).
+      // Backend `/api/projects/{id}/analyze` is multipart Form + synchronous
+      // JSON response (10-25s on gpt-4o-mini / gemini). It does NOT stream
+      // SSE — read the response as a regular JSON object.
       const data = await apiAnalyzeFeature(projectId, text);
-      const formatted = formatDashboardAsChat(data);
+      const dash = data?.dashboard || {};
+      const lines: string[] = [];
+      if (dash.zones?.length) {
+        lines.push('Затронутые области:');
+        for (const z of dash.zones) lines.push(`• ${z.label || z.id} — ${z.severity}`);
+      }
+      if (dash.risks?.length) {
+        lines.push('\nРиски:');
+        for (const r of dash.risks) {
+          lines.push(`• [${r.severity}] ${r.explanation}`);
+          if (r.article) lines.push(`  📄 ${r.article}`);
+        }
+      }
+      if (dash.checklist?.length) {
+        lines.push('\nЧеклист:');
+        for (const grp of dash.checklist) {
+          lines.push(`${grp.role}:`);
+          for (const it of grp.items || []) lines.push(`  - ${it}`);
+        }
+      }
+      if (dash.documents?.length) {
+        lines.push('\nДокументы к обновлению:');
+        for (const d of dash.documents) lines.push(`• ${d}`);
+      }
+      const formatted = lines.join('\n') || JSON.stringify(data, null, 2);
       setMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: 'agent', content: formatted, streaming: false }; return u; });
     } catch (err: any) {
       setMessages(prev => { const u = [...prev]; u[u.length - 1] = { role: 'agent', content: err?.message || t('project_detail.chat_error_default'), error: true, streaming: false }; return u; });
@@ -326,6 +169,14 @@ function ProjectDetailContent() {
               {project.created_at && <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: 8 }}>{t('project_detail.label_created')}: {new Date(project.created_at).toLocaleDateString()}</p>}
             </div>
 
+            <div className="card" style={{ marginBottom: 32 }}>
+              <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap' }}>
+                <div><div className="form-label" style={{ marginBottom: 4 }}>{t('project_detail.label_id')}</div><code style={{ fontFamily: 'monospace', color: 'var(--accent)', fontSize: '0.875rem' }}>{project.id}</code></div>
+                <div><div className="form-label" style={{ marginBottom: 4 }}>{t('project_detail.label_name')}</div><span>{project.name}</span></div>
+                {project.description && <div><div className="form-label" style={{ marginBottom: 4 }}>{t('project_detail.label_desc')}</div><span style={{ color: 'var(--text-muted)' }}>{project.description}</span></div>}
+              </div>
+            </div>
+
             {/* Chat */}
             <div className="card" style={{ marginBottom: 32, padding: 0, overflow: 'hidden' }}>
               <div style={{ padding: '20px 28px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -364,35 +215,14 @@ function ProjectDetailContent() {
                     <div style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, background: msg.role === 'user' ? 'var(--accent-dim)' : 'linear-gradient(135deg, var(--accent), #a78bfa)', border: msg.role === 'user' ? '1px solid rgba(108,99,255,0.3)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', color: msg.role === 'user' ? 'var(--accent)' : '#fff' }}>
                       {msg.role === 'user' ? '↑' : '◈'}
                     </div>
-                    <div style={{ maxWidth: msg.role === 'user' ? '72%' : '92%', flex: msg.role === 'agent' ? 1 : 'initial', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ maxWidth: '72%', display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {msg.files && msg.files.length > 0 && (
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
                           {msg.files.map((f, fi) => <span key={fi} style={{ padding: '4px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 100, fontSize: '0.72rem', color: 'var(--text-muted)' }}>📎 {f}</span>)}
                         </div>
                       )}
-                      <div className={msg.role === 'agent' && !msg.error ? 'chat-md' : undefined} style={{ padding: msg.role === 'agent' ? '18px 22px' : '12px 16px', borderRadius: msg.role === 'user' ? '16px 4px 16px 16px' : '4px 16px 16px 16px', background: msg.role === 'user' ? 'var(--accent)' : msg.error ? 'var(--danger-dim)' : 'var(--surface2)', border: msg.role === 'agent' ? `1px solid ${msg.error ? 'rgba(255,77,106,0.25)' : 'var(--border)'}` : 'none', color: msg.role === 'user' ? '#fff' : msg.error ? 'var(--danger)' : 'var(--text)', fontSize: msg.role === 'agent' ? '0.95rem' : '0.9rem', lineHeight: 1.7, wordBreak: 'break-word' }}>
-                        {msg.role === 'agent' && msg.content && !msg.error ? (
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              a: ({ node, ...props }) => (
-                                <a {...props} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }} />
-                              ),
-                              ul: ({ node, ...props }) => <ul {...props} style={{ paddingLeft: 22, margin: '6px 0' }} />,
-                              ol: ({ node, ...props }) => <ol {...props} style={{ paddingLeft: 22, margin: '6px 0' }} />,
-                              li: ({ node, ...props }) => <li {...props} style={{ margin: '2px 0' }} />,
-                              h1: ({ node, ...props }) => <h3 {...props} style={{ margin: '12px 0 6px', fontSize: '1.05rem' }} />,
-                              h2: ({ node, ...props }) => <h3 {...props} style={{ margin: '12px 0 6px', fontSize: '1.05rem' }} />,
-                              h3: ({ node, ...props }) => <h3 {...props} style={{ margin: '12px 0 6px', fontSize: '1.05rem' }} />,
-                              code: ({ node, ...props }) => <code {...props} style={{ background: 'var(--surface)', padding: '1px 6px', borderRadius: 4, fontSize: '0.85em' }} />,
-                              p: ({ node, ...props }) => <p {...props} style={{ margin: '4px 0' }} />,
-                            }}
-                          >
-                            {msg.content}
-                          </ReactMarkdown>
-                        ) : (
-                          <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content || (msg.streaming ? '' : '…')}</div>
-                        )}
+                      <div style={{ padding: '12px 16px', borderRadius: msg.role === 'user' ? '16px 4px 16px 16px' : '4px 16px 16px 16px', background: msg.role === 'user' ? 'var(--accent)' : msg.error ? 'var(--danger-dim)' : 'var(--surface2)', border: msg.role === 'agent' ? `1px solid ${msg.error ? 'rgba(255,77,106,0.25)' : 'var(--border)'}` : 'none', color: msg.role === 'user' ? '#fff' : msg.error ? 'var(--danger)' : 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {msg.content || (msg.streaming ? '' : '…')}
                         {msg.streaming && <span style={{ display: 'inline-block', width: 8, height: 14, background: 'var(--accent)', borderRadius: 2, marginLeft: 4, verticalAlign: 'middle', animation: 'blink 1s step-end infinite' }} />}
                       </div>
                     </div>

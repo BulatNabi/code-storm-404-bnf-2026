@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import AuthGuard from '@/components/AuthGuard';
 import { apiGetProjects, apiCreateProject, apiGetJiraStatus, apiConnectJira, apiDisconnectJira } from '@/lib/api';
@@ -17,9 +16,7 @@ export default function ProjectsPage() {
 
 function ProjectsContent() {
   const { t } = useLang();
-  const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [newFiles, setNewFiles] = useState<File[]>([]);
   const [projLoading, setProjLoading] = useState(true);
   const [projError, setProjError] = useState('');
   const [newName, setNewName] = useState('');
@@ -46,21 +43,12 @@ function ProjectsContent() {
   async function handleCreateProject(e: React.FormEvent) {
     e.preventDefault(); setCreating(true); setCreateError(''); setCreateSuccess('');
     try {
-      const project = await apiCreateProject({
-        name: newName,
-        description: newDesc,
-        files: newFiles,
-      });
-      // Open the project's chat page so the user can submit feature
-      // descriptions. The project description itself is product CONTEXT
-      // (e.g. "Mobile bank for retail clients in UZ"), NOT a feature to
-      // analyze — the backend already forwards it to ai-core as the
-      // `project_description` background field on every /analyze call.
-      router.push(`/projects/${project.id}`);
-    } catch (err: any) {
-      setCreateError(err?.detail || t('projects.create_error_default'));
-      setCreating(false);
-    }
+      const project = await apiCreateProject({ name: newName, description: newDesc });
+      setProjects(prev => [...prev, project]);
+      setNewName(''); setNewDesc('');
+      setCreateSuccess(`"${project.name}" created!`);
+    } catch (err: any) { setCreateError(err?.detail || t('projects.create_error_default')); }
+    finally { setCreating(false); }
   }
 
   async function loadJira() {
@@ -94,6 +82,24 @@ function ProjectsContent() {
             <p style={{ color: 'var(--text-muted)' }}>{t('projects.subtitle')}</p>
           </div>
 
+          <div style={{ marginBottom: 24 }}>
+              <Link href="/integrations/jira" 
+              style={{ textDecoration: 'none', display: 'inline-block', width: '320px' }}>
+                <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 20, cursor: 'pointer' }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'}
+                >
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                      <span style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}>🔗</span>
+                      <h2 style={{ fontSize: '1.1rem' }}>{t('projects.jira_title')}</h2>
+                    </div>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>{t('projects.jira_subtitle')}</p>
+                  </div>
+                </div>
+              </Link>
+            </div>
+
           <div className="grid-3">
             {/* Create */}
             <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -117,23 +123,6 @@ function ProjectsContent() {
                   <label className="form-label">{t('projects.create_desc')}</label>
                   <textarea className="form-input form-textarea" placeholder={t('projects.create_desc_placeholder')}
                     value={newDesc} onChange={e => setNewDesc(e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Прикрепить ТЗ / спеку (PDF или DOCX, до 5 файлов)</label>
-                  <input
-                    className="form-input"
-                    type="file"
-                    multiple
-                    accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    onChange={e => setNewFiles(Array.from(e.target.files || []).slice(0, 5))}
-                  />
-                  {newFiles.length > 0 && (
-                    <div style={{ marginTop: 8, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      {newFiles.map(f => (
-                        <div key={f.name}>📎 {f.name} · {(f.size/1024).toFixed(0)} KB</div>
-                      ))}
-                    </div>
-                  )}
                 </div>
                 <button type="submit" className="btn btn-primary" disabled={creating}>
                   {creating ? t('projects.create_submitting') : t('projects.create_submit')}
@@ -162,82 +151,15 @@ function ProjectsContent() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, overflowY: 'auto', maxHeight: 320 }}>
                 {projects.map(project => (
                   <Link key={project.id} href={`/projects/${project.id}`}
-                    style={{ display: 'block', padding: '14px 16px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', transition: 'border-color 0.2s, transform 0.15s', minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}
+                    style={{ display: 'block', padding: '14px 16px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', transition: 'border-color 0.2s, transform 0.15s' }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLElement).style.transform = 'translateX(4px)'; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.transform = 'translateX(0)'; }}
                   >
-                    <div style={{ fontWeight: 500, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</div>
-                    {project.description && (
-                      <div
-                        style={{
-                          color: 'var(--text-muted)',
-                          fontSize: '0.8rem',
-                          // Two-line clamp + ellipsis. Falls back to single-line
-                          // truncation in browsers without -webkit-line-clamp.
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical' as any,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          lineHeight: 1.45,
-                          maxHeight: '2.9em',
-                        }}
-                        title={project.description}
-                      >
-                        {project.description}
-                      </div>
-                    )}
+                    <div style={{ fontWeight: 500, marginBottom: 4 }}>{project.name}</div>
+                    {project.description && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.description}</div>}
                   </Link>
                 ))}
               </div>
-            </div>
-
-            {/* Jira */}
-            <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                  <span style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}>🔗</span>
-                  <h2 style={{ fontSize: '1.1rem' }}>{t('projects.jira_title')}</h2>
-                </div>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>{t('projects.jira_subtitle')}</p>
-              </div>
-              <div className="divider" style={{ margin: 0 }} />
-              {jiraLoading && <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>{t('projects.jira_checking')}</p>}
-              {jiraError && <div className="alert alert-error">{jiraError}</div>}
-              {jiraSuccess && <div className="alert alert-success">{jiraSuccess}</div>}
-              {!jiraLoading && jira?.connected ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  <div style={{ padding: '14px 16px', background: 'var(--success-dim)', border: '1px solid rgba(52,211,153,0.25)', borderRadius: 'var(--radius)' }}>
-                    <div style={{ color: 'var(--success)', fontWeight: 500, marginBottom: 4 }}>✓ {t('projects.jira_connected')}</div>
-                    {jira.domain && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{jira.domain}</div>}
-                    {jira.email && <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{jira.email}</div>}
-                  </div>
-                  <button className="btn btn-danger" onClick={handleDisconnectJira} disabled={jiraConnecting}>
-                    {jiraConnecting ? t('projects.jira_disconnecting') : t('projects.jira_disconnect')}
-                  </button>
-                </div>
-              ) : !jiraLoading ? (
-                <form onSubmit={handleConnectJira} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  <div className="form-group">
-                    <label className="form-label">{t('projects.jira_domain')}</label>
-                    <input className="form-input" type="text" placeholder={t('projects.jira_domain_placeholder')}
-                      value={jiraForm.domain} onChange={e => setJiraForm(p => ({ ...p, domain: e.target.value }))} required />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">{t('projects.jira_email')}</label>
-                    <input className="form-input" type="email" placeholder={t('projects.jira_email_placeholder')}
-                      value={jiraForm.email} onChange={e => setJiraForm(p => ({ ...p, email: e.target.value }))} required />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">{t('projects.jira_token')}</label>
-                    <input className="form-input" type="password" placeholder={t('projects.jira_token_placeholder')}
-                      value={jiraForm.api_token} onChange={e => setJiraForm(p => ({ ...p, api_token: e.target.value }))} required />
-                  </div>
-                  <button type="submit" className="btn btn-primary" disabled={jiraConnecting}>
-                    {jiraConnecting ? t('projects.jira_connecting') : t('projects.jira_connect')}
-                  </button>
-                </form>
-              ) : null}
             </div>
           </div>
         </div>
