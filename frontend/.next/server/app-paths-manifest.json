@@ -1,8 +1,0 @@
-{
-  "/register/page": "app/register/page.js",
-  "/page": "app/page.js",
-  "/login/page": "app/login/page.js",
-  "/projects/[project_id]/page": "app/projects/[project_id]/page.js",
-  "/integrations/jira/page": "app/integrations/jira/page.js",
-  "/projects/page": "app/projects/page.js"
-}
