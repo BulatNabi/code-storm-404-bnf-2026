@@ -46,7 +46,7 @@ docs/       — архитектура, AI-концепция, деплой, д�
 
 | Документ | Что внутри |
 |---|---|
-| [`docs/run_guide.md`](docs/run_guide.md) | **Подробный гайд по локальному запуску всей системы с нуля** |
+| [`RUN_GUIDE.md`](RUN_GUIDE.md) | **Подробный гайд по локальному запуску всей системы с нуля** |
 | [`docs/architecture_presentation.md`](docs/architecture_presentation.md) | Полное описание архитектуры с диаграммами и обоснованием решений |
 | [`docs/architecture_flow.md`](docs/architecture_flow.md) | Поток данных и связи между микросервисами |
 | [`docs/ai_concept.md`](docs/ai_concept.md) | ТЗ на AI-часть (knowledge base, pipeline, теги, retrieval) |

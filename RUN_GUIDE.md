@@ -2,7 +2,7 @@
 
 Полная инструкция по локальному запуску всех микросервисов с нуля.
 
-> Для деплоя на production-сервер — см. [`deploy.md`](deploy.md). Этот документ описывает локальный запуск разработческого стека.
+> Для деплоя на production-сервер — см. [`docs/deploy.md`](docs/deploy.md). Этот документ описывает локальный запуск разработческого стека.
 
 ---
 
@@ -567,10 +567,10 @@ docker volume rm fintech-radar-backend-data
 
 ## Что дальше
 
-- [`architecture_presentation.md`](architecture_presentation.md) — полное описание архитектуры и обоснование решений
-- [`ai_concept.md`](ai_concept.md) — ТЗ на AI-часть от ML-команды
-- [`deploy.md`](deploy.md) — инструкция по production-деплою на сервер
-- [`demo-responses.md`](demo-responses.md) — реальные демо-кейсы с прода
+- [`docs/architecture_presentation.md`](docs/architecture_presentation.md) — полное описание архитектуры и обоснование решений
+- [`docs/ai_concept.md`](docs/ai_concept.md) — ТЗ на AI-часть от ML-команды
+- [`docs/deploy.md`](docs/deploy.md) — инструкция по production-деплою на сервер
+- [`docs/demo-responses.md`](docs/demo-responses.md) — реальные демо-кейсы с прода
 
 Готовый swagger backend'а: http://localhost:8000/docs
 Готовый swagger AI-Core: http://localhost:8001/docs
