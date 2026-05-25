@@ -39,6 +39,11 @@ class JiraAPIClient:
                 return False
             raise
 
+    async def list_projects(self, limit: int = 100) -> List[dict]:
+        """Все проекты (доски), доступные подключённому аккаунту."""
+        data = await self._request("GET", "/project/search", params={"maxResults": limit})
+        return data.get("values", [])
+
     async def search_project_issues(self, project_key: str, limit: int = 50) -> List[dict]:
         """Все задачи проекта (доски) по ключу проекта."""
         params = {

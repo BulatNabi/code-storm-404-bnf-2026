@@ -23,7 +23,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     projects: Mapped[list["Project"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    jira_boards: Mapped[list["JiraBoard"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    jira_connection: Mapped["JiraConnection"] = relationship(back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 
 class Project(Base):
@@ -70,16 +70,19 @@ class Analysis(Base):
     project: Mapped["Project"] = relationship(back_populates="analyses")
 
 
-class JiraBoard(Base):
-    __tablename__ = "jira_boards"
+class JiraConnection(Base):
+    """Подключение Jira-аккаунта пользователя (одно на юзера).
+
+    Креды храним на уровне аккаунта, а не доски: доски подтягиваются
+    из Jira «вживую» по этим кредам.
+    """
+    __tablename__ = "jira_connections"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
-    board_key: Mapped[str] = mapped_column(String, nullable=False)   # e.g. "BANK"
-    board_name: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), unique=True, nullable=False)
     domain: Mapped[str] = mapped_column(String, nullable=False)      # mycompany.atlassian.net
     email: Mapped[str] = mapped_column(String, nullable=False)
     api_token: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
-    user: Mapped["User"] = relationship(back_populates="jira_boards")
+    user: Mapped["User"] = relationship(back_populates="jira_connection")

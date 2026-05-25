@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import User, Project, Analysis, JiraBoard
+from app.models import User, Project, Analysis, JiraConnection
 from app.schemas.analysis import AnalyzeResponse, AnalysisOut, AnalysisHistoryResponse, Dashboard
 from app.services.jira_client import JiraAPIClient
 
@@ -114,14 +114,13 @@ async def analyze(
     db.commit()
     db.refresh(analysis)
 
-    if jira_issue_key and project.jira_board_id and summary:
-        board = db.query(JiraBoard).filter(
-            JiraBoard.board_key == project.jira_board_id,
-            JiraBoard.user_id == current_user.id,
+    if jira_issue_key and summary:
+        conn = db.query(JiraConnection).filter(
+            JiraConnection.user_id == current_user.id,
         ).first()
-        if board:
+        if conn:
             try:
-                client = JiraAPIClient(board.domain, board.email, board.api_token)
+                client = JiraAPIClient(conn.domain, conn.email, conn.api_token)
                 comment = _build_jira_comment(summary)
                 await client.post_comment(jira_issue_key, comment)
             except Exception as e:
