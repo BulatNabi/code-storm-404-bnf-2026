@@ -108,6 +108,7 @@ function ProjectDetailContent() {
 
   async function handleSend() {
     const text = inputText.trim();
+    
     if (!text || isStreaming) return;   // backend /analyze requires text
     const fileNames = attachedFiles.map(f => f.name);
     setMessages(prev => [...prev, { role: 'user', content: text, files: fileNames.length ? fileNames : undefined }]);

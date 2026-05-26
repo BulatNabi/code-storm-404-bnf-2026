@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import AuthGuard from '@/components/AuthGuard';
+import { useLang } from '@/lib/lang-context';
 import { apiGetJiraBoardIssues, apiGetOrCreateProjectForIssue, extractErrorMessage, type JiraIssue } from '@/lib/api';
 
 const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
@@ -35,6 +36,7 @@ export default function JiraBoardPage() {
 }
 
 function JiraBoardContent() {
+  const { t } = useLang();
   const params = useParams();
   const router = useRouter();
   const boardKey = decodeURIComponent(String(params.board_key ?? ''));
@@ -92,15 +94,15 @@ function JiraBoardContent() {
           {/* Back + header */}
           <div style={{ marginBottom: 28 }}>
             <Link href="/integrations/jira" className="btn btn-ghost" style={{ marginBottom: 20, display: 'inline-flex' }}>
-              ← Back to boards
+              ← {t('jira_issues.back')}
             </Link>
             <h1 style={{ fontSize: '2.2rem', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ fontFamily: 'monospace', color: 'var(--accent)', background: 'var(--accent-dim)', padding: '4px 12px', borderRadius: 8, fontSize: '1.6rem' }}>
                 {boardKey}
               </span>
-              <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '1.4rem' }}>issues</span>
+              <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '1.4rem' }}>{t('jira_issues.issues')}</span>
             </h1>
-            <p style={{ color: 'var(--text-muted)' }}>{!loading && `${total} total`}</p>
+            <p style={{ color: 'var(--text-muted)' }}>{!loading && `${total} ${t('jira_issues.total')}`}</p>
           </div>
 
           {/* Search */}
@@ -108,16 +110,16 @@ function JiraBoardContent() {
             <input
               className="form-input"
               type="text"
-              placeholder="Search by key or summary…"
+              placeholder={t('jira_issues.search_placeholder')}
               value={search}
               onChange={e => setSearch(e.target.value)}
               style={{ width: 280 }}
             />
-            <button type="submit" className="btn btn-ghost">Search</button>
+            <button type="submit" className="btn btn-ghost">{t('jira_issues.search')}</button>
           </form>
 
           {loading && (
-            <p style={{ color: 'var(--text-muted)' }}>Loading issues…</p>
+            <p style={{ color: 'var(--text-muted)' }}>{t('jira_issues.loading')}</p>
           )}
 
           {error && (
@@ -131,7 +133,7 @@ function JiraBoardContent() {
           {!loading && !error && issues.length === 0 && (
             <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>📋</div>
-              <p>No issues found for this board.</p>
+              <p>{t('jira_issues.empty')}</p>
             </div>
           )}
 
@@ -145,7 +147,7 @@ function JiraBoardContent() {
                 borderBottom: '1px solid var(--border)',
                 background: 'var(--surface2)',
               }}>
-                {['Key', 'Summary', 'Status', 'Type', 'Assignee', 'Updated', ''].map((col, i) => (
+                {[t('jira_issues.col_key'), t('jira_issues.col_summary'), t('jira_issues.col_status'), t('jira_issues.col_type'), t('jira_issues.col_assignee'), t('jira_issues.col_updated'), ''].map((col, i) => (
                   <div key={i} style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 8px' }}>
                     {col}
                   </div>
@@ -211,7 +213,7 @@ function JiraBoardContent() {
                         onClick={() => handleMoreDetails(issue)}
                         disabled={busyKey !== null}
                       >
-                        {busyKey === issue.key ? 'Opening…' : 'More details'}
+                        {busyKey === issue.key ? t('jira_issues.opening') : t('jira_issues.more_details')}
                       </button>
                     </div>
                   </div>

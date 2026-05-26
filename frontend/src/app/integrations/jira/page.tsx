@@ -136,13 +136,13 @@ function JiraIntegrationContent() {
             {statusLoading ? (
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 100, fontSize: '0.875rem', color: 'var(--text-muted)' }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--text-dim)', display: 'inline-block' }} />
-                Checking status…
+                {t('jira_status.checking')}
               </div>
             ) : status?.connected ? (
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 12, padding: '10px 18px', background: 'var(--success-dim)', border: '1px solid rgba(52,211,153,0.3)', borderRadius: 100 }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--success)', display: 'inline-block' }} />
                 <span style={{ color: 'var(--success)', fontWeight: 500, fontSize: '0.875rem' }}>
-                  Connected
+                  {t('jira_status.connected')}
                 </span>
                 {status.domain && (
                   <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontFamily: 'monospace' }}>
@@ -153,13 +153,13 @@ function JiraIntegrationContent() {
                   <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>· {status.email}</span>
                 )}
                 {status.connected_at && (
-                  <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>since {formatDate(status.connected_at)}</span>
+                  <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{t('jira_status.connected_since')} {formatDate(status.connected_at)}</span>
                 )}
               </div>
             ) : (
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 18px', background: 'var(--danger-dim)', border: '1px solid rgba(255,77,106,0.25)', borderRadius: 100 }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--danger)', display: 'inline-block' }} />
-                <span style={{ color: 'var(--danger)', fontWeight: 500, fontSize: '0.875rem' }}>Not connected</span>
+                <span style={{ color: 'var(--danger)', fontWeight: 500, fontSize: '0.875rem' }}>{t('jira_status.not_connected')}</span>
               </div>
             )}
           </div>
@@ -236,7 +236,7 @@ function JiraIntegrationContent() {
                   <h2 style={{ fontSize: '1.1rem', color: 'var(--danger)' }}>{t('jira_status.disconnect')}</h2>
                 </div>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                  Remove the Jira connection for your account. You can reconnect at any time.
+                  {t('jira_status.disconnect_subtitle')}
                 </p>
               </div>
 
@@ -260,25 +260,25 @@ function JiraIntegrationContent() {
                   <div style={{ padding: '14px 16px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {status.domain && (
                       <div style={{ fontSize: '0.85rem' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>Domain: </span>
+                        <span style={{ color: 'var(--text-muted)' }}>{t('jira_status.domain_field')}: </span>
                         <span style={{ fontFamily: 'monospace', color: 'var(--accent)' }}>{status.domain}</span>
                       </div>
                     )}
                     {status.email && (
                       <div style={{ fontSize: '0.85rem' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>Email: </span>
+                        <span style={{ color: 'var(--text-muted)' }}>{t('jira_status.email_field')}: </span>
                         <span>{status.email}</span>
                       </div>
                     )}
                     {status.connected_at && (
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                        Connected since {formatDate(status.connected_at)}
+                        {t('jira_status.connected_since')} {formatDate(status.connected_at)}
                       </div>
                     )}
                   </div>
                 ) : (
                   <div style={{ padding: '14px 16px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontSize: '0.875rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>
-                    No active connection to disconnect.
+                    {t('jira_status.no_connection')}
                   </div>
                 )}
 
@@ -297,14 +297,14 @@ function JiraIntegrationContent() {
           {status?.connected && (
             <div>
               <div style={{ marginBottom: 20 }}>
-                <h2 style={{ fontSize: '1.4rem', marginBottom: 4 }}>Boards</h2>
+                <h2 style={{ fontSize: '1.4rem', marginBottom: 4 }}>{t('jira_boards.title')}</h2>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                  {!boardsLoading && `${boards.length} board${boards.length === 1 ? '' : 's'} · select one to view its issues`}
+                  {!boardsLoading && `${boards.length} ${t('jira_boards.count_label')} · ${t('jira_boards.select_hint')}`}
                 </p>
               </div>
 
               {boardsLoading && (
-                <p style={{ color: 'var(--text-muted)' }}>Loading boards…</p>
+                <p style={{ color: 'var(--text-muted)' }}>{t('jira_boards.loading')}</p>
               )}
 
               {boardsError && (
@@ -314,7 +314,7 @@ function JiraIntegrationContent() {
               {!boardsLoading && !boardsError && boards.length === 0 && (
                 <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
                   <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>📋</div>
-                  <p>No boards found for this account.</p>
+                  <p>{t('jira_boards.empty')}</p>
                 </div>
               )}
 
@@ -346,9 +346,9 @@ function JiraIntegrationContent() {
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>
-                          Added {formatDate(board.created_at)}
+                          {t('jira_boards.added')} {formatDate(board.created_at)}
                         </span>
-                        <span style={{ fontSize: '0.85rem', color: 'var(--accent)', fontWeight: 500 }}>View issues →</span>
+                        <span style={{ fontSize: '0.85rem', color: 'var(--accent)', fontWeight: 500 }}>{t('jira_boards.view_issues')} →</span>
                       </div>
                     </Link>
                   ))}
