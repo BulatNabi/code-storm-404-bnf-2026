@@ -1,6 +1,8 @@
 // API client for the FinTech Regulatory Radar backend (FastAPI).
 // All endpoints live under `${BASE_URL}/api`. CORS is open on the backend.
-const BASE_URL = 'http://localhost:8000';
+// Override per environment via NEXT_PUBLIC_API_URL (baked at build time);
+// defaults to localhost for local dev (see RUN_GUIDE.md §8).
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -273,12 +275,10 @@ export function apiGetAnalysis(project_id: string, analysis_id: string): Promise
 const JIRA_BASE = '/api/integrations/jira';
 
 // ── TEMPORARY MOCK ───────────────────────────────────────────────────────────
-// Forces the Jira integration to appear connected with sample data, bypassing
-// the backend (whose /connect path currently 500s on a redirect/JSON bug).
-// Flip JIRA_MOCK to false — or delete this block and the `if (JIRA_MOCK)`
-// guards below — to restore real API calls.
-// TODO: remove once the backend connection bug is fixed.
-const JIRA_MOCK = true;
+// Set true to bypass the backend with sample Jira data (local UI work).
+// The backend slash-redirect bug that originally forced this is fixed
+// (board-register API + redirect_slashes=False), so this is off by default.
+const JIRA_MOCK = false;
 
 const MOCK_STATUS: JiraStatus = {
   connected: true,
