@@ -13,6 +13,7 @@ export default function RegisterPage() {
   const [form, setForm] = useState({ name: '', surname: '', email: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(''); 
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -21,12 +22,20 @@ export default function RegisterPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+    setSuccess('');
     setLoading(true);
     try {
       await apiRegister(form);
-      router.push('/login?registered=1');
+      setSuccess('Account created successfully! Redirecting to login…');
+      setTimeout(() => router.push('/login'), 2000);
     } catch (err: any) {
-      setError(err?.detail || t('register.error_default'));
+      setError(
+        typeof err?.message === 'string'
+          ? err.message
+          : typeof err?.detail === 'string'
+          ? err.detail
+          : t('register.error_default')
+      );
     } finally {
       setLoading(false);
     }
@@ -45,8 +54,9 @@ export default function RegisterPage() {
             </p>
           </div>
           <div className="card">
-            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
               {error && <div className="alert alert-error">{error}</div>}
+              {success && <div className="alert alert-success">{success}</div>}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                 <div className="form-group">
                   <label className="form-label">{t('register.first_name')}</label>

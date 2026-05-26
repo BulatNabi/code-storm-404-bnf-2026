@@ -9,23 +9,11 @@ import {
   apiGetJiraStatus,
   apiConnectJira,
   apiDisconnectJira,
-  apiGetJiraIssues,
+  apiGetJiraBoards,
   extractErrorMessage,
   type JiraStatus,
-  type JiraIssue,
+  type JiraBoard,
 } from '@/lib/api';
-
-const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
-  'To Do':       { bg: 'rgba(100,100,120,0.15)', color: '#9090b0' },
-  'In Progress': { bg: 'rgba(108,99,255,0.15)',  color: 'var(--accent)' },
-  'Done':        { bg: 'rgba(52,211,153,0.15)',  color: 'var(--success)' },
-  'In Review':   { bg: 'rgba(251,191,36,0.15)',  color: '#fbbf24' },
-  'Blocked':     { bg: 'rgba(255,77,106,0.15)',  color: 'var(--danger)' },
-};
-
-function statusStyle(s?: string) {
-  return STATUS_COLORS[s ?? ''] ?? { bg: 'rgba(100,100,120,0.12)', color: 'var(--text-muted)' };
-}
 
 function formatDate(iso?: string) {
   if (!iso) return '—';
@@ -56,12 +44,10 @@ function JiraIntegrationContent() {
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectMsg, setDisconnectMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // ── Issues ────────────────────────────────────────────────────────────────
-  const [issues, setIssues] = useState<JiraIssue[]>([]);
-  const [issuesTotal, setIssuesTotal] = useState(0);
-  const [issuesLoading, setIssuesLoading] = useState(false);
-  const [issuesError, setIssuesError] = useState('');
-  const [search, setSearch] = useState('');
+  // ── Boards ────────────────────────────────────────────────────────────────
+  const [boards, setBoards] = useState<JiraBoard[]>([]);
+  const [boardsLoading, setBoardsLoading] = useState(false);
+  const [boardsError, setBoardsError] = useState('');
 
   // ── Load status ───────────────────────────────────────────────────────────
   const loadStatus = useCallback(async () => {
@@ -78,24 +64,23 @@ function JiraIntegrationContent() {
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  // ── Load issues when connected ────────────────────────────────────────────
-  const loadIssues = useCallback(async (q?: string) => {
-    setIssuesLoading(true);
-    setIssuesError('');
+  // ── Load boards when connected ──────────────────────────────────────────────
+  const loadBoards = useCallback(async () => {
+    setBoardsLoading(true);
+    setBoardsError('');
     try {
-      const data = await apiGetJiraIssues(q);
-      setIssues(data.items ?? []);
-      setIssuesTotal(data.total ?? 0);
+      const data = await apiGetJiraBoards();
+      setBoards(data);
     } catch (err) {
-      setIssuesError(extractErrorMessage(err));
+      setBoardsError(extractErrorMessage(err));
     } finally {
-      setIssuesLoading(false);
+      setBoardsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (status?.connected) loadIssues();
-  }, [status?.connected, loadIssues]);
+    if (status?.connected) loadBoards();
+  }, [status?.connected, loadBoards]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   async function handleConnect(e: React.FormEvent) {
@@ -107,7 +92,7 @@ function JiraIntegrationContent() {
       setStatus(result);
       setConnectMsg({ type: 'success', text: t('jira_status.success_connect') });
       setConnectForm({ domain: '', email: '', api_token: '' });
-      loadIssues();
+      loadBoards();
     } catch (err) {
       setConnectMsg({ type: 'error', text: extractErrorMessage(err) });
     } finally {
@@ -121,19 +106,13 @@ function JiraIntegrationContent() {
     try {
       await apiDisconnectJira();
       setStatus({ connected: false });
-      setIssues([]);
-      setIssuesTotal(0);
+      setBoards([]);
       setDisconnectMsg({ type: 'success', text: t('jira_status.success_disconnect') });
     } catch (err) {
       setDisconnectMsg({ type: 'error', text: extractErrorMessage(err) });
     } finally {
       setDisconnecting(false);
     }
-  }
-
-  function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
-    loadIssues(search);
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -314,125 +293,65 @@ function JiraIntegrationContent() {
             </div>
           </div>
 
-          {/* ── Issues list (only when connected) ──────────────────────── */}
+          {/* ── Boards list (only when connected) ──────────────────────── */}
           {status?.connected && (
             <div>
-              {/* Issues header + search */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, marginBottom: 20 }}>
-                <div>
-                  <h2 style={{ fontSize: '1.4rem', marginBottom: 4 }}>{t('jira_issues.title')}</h2>
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                    {!issuesLoading && `${issuesTotal} total`}
-                  </p>
-                </div>
-                <form onSubmit={handleSearch} style={{ display: 'flex', gap: 10 }}>
-                  <input
-                    className="form-input"
-                    type="text"
-                    placeholder={t('jira_issues.search_placeholder')}
-                    value={search}
-                    onChange={e => setSearch(e.target.value)}
-                    style={{ width: 280 }}
-                  />
-                  <button type="submit" className="btn btn-ghost">Search</button>
-                </form>
+              <div style={{ marginBottom: 20 }}>
+                <h2 style={{ fontSize: '1.4rem', marginBottom: 4 }}>Boards</h2>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                  {!boardsLoading && `${boards.length} board${boards.length === 1 ? '' : 's'} · select one to view its issues`}
+                </p>
               </div>
 
-              {issuesLoading && (
-                <p style={{ color: 'var(--text-muted)' }}>{t('jira_issues.loading')}</p>
+              {boardsLoading && (
+                <p style={{ color: 'var(--text-muted)' }}>Loading boards…</p>
               )}
 
-              {issuesError && (
-                <div className="alert alert-error" style={{ marginBottom: 20 }}>{issuesError}</div>
+              {boardsError && (
+                <div className="alert alert-error" style={{ marginBottom: 20 }}>{boardsError}</div>
               )}
 
-              {!issuesLoading && !issuesError && issues.length === 0 && (
+              {!boardsLoading && !boardsError && boards.length === 0 && (
                 <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
                   <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>📋</div>
-                  <p>{t('jira_issues.empty')}</p>
+                  <p>No boards found for this account.</p>
                 </div>
               )}
 
-              {!issuesLoading && issues.length > 0 && (
-                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                  {/* Table header */}
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: '110px 1fr 130px 130px 160px 80px 60px',
-                    padding: '10px 20px',
-                    borderBottom: '1px solid var(--border)',
-                    background: 'var(--surface2)',
-                  }}>
-                    {['Key', 'Summary', 'Status', 'Type', 'Assignee', 'Updated', ''].map((col, i) => (
-                      <div key={i} style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '4px 8px' }}>
-                        {col}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Rows */}
-                  {issues.map((issue, idx) => {
-                    const ss = statusStyle(issue.status);
-                    return (
-                      <div
-                        key={issue.key}
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: '110px 1fr 130px 130px 160px 80px 60px',
-                          padding: '13px 20px',
-                          borderBottom: idx < issues.length - 1 ? '1px solid var(--border)' : 'none',
-                          alignItems: 'center',
-                          transition: 'background 0.15s',
-                        }}
-                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--surface2)'}
-                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
-                      >
-                        {/* Key */}
-                        <div style={{ padding: '0 8px' }}>
-                          <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: 'var(--accent)', background: 'var(--accent-dim)', padding: '3px 8px', borderRadius: 6 }}>
-                            {issue.key}
+              {!boardsLoading && boards.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                  {boards.map(board => (
+                    <Link
+                      key={board.board_key}
+                      href={`/integrations/jira/boards/${board.board_key}`}
+                      className="card"
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 14,
+                        textDecoration: 'none',
+                        color: 'inherit',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <span style={{ width: 40, height: 40, borderRadius: 10, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem', flexShrink: 0 }}>📋</span>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: '1rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {board.board_name}
+                          </div>
+                          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--accent)', background: 'var(--accent-dim)', padding: '2px 8px', borderRadius: 6, display: 'inline-block', marginTop: 4 }}>
+                            {board.board_key}
                           </span>
                         </div>
-
-                        {/* Summary */}
-                        <div style={{ padding: '0 8px', fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {issue.summary}
-                          {issue.has_attachments && (
-                            <span title="Has attachments" style={{ marginLeft: 6, fontSize: '0.75rem', color: 'var(--text-dim)' }}>📎</span>
-                          )}
-                        </div>
-
-                        {/* Status */}
-                        <div style={{ padding: '0 8px' }}>
-                          <span style={{ padding: '3px 10px', borderRadius: 100, fontSize: '0.73rem', fontWeight: 500, background: ss.bg, color: ss.color }}>
-                            {issue.status || '—'}
-                          </span>
-                        </div>
-
-                        {/* Type */}
-                        <div style={{ padding: '0 8px', fontSize: '0.83rem', color: 'var(--text-muted)' }}>
-                          {issue.issue_type || '—'}
-                        </div>
-
-                        {/* Assignee */}
-                        <div style={{ padding: '0 8px', fontSize: '0.83rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {issue.assignee || '—'}
-                        </div>
-
-                        {/* Updated */}
-                        <div style={{ padding: '0 8px', fontSize: '0.78rem', color: 'var(--text-dim)' }}>
-                          {formatDate(issue.updated_at)}
-                        </div>
-
-                        {/* Link */}
-                        <div style={{ padding: '0 8px' }}>
-                          <Link href={`/integrations/jira/issues/${issue.key}`} className="btn btn-ghost" style={{ padding: '5px 10px', fontSize: '0.78rem' }}>
-                            View
-                          </Link>
-                        </div>
                       </div>
-                    );
-                  })}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>
+                          Added {formatDate(board.created_at)}
+                        </span>
+                        <span style={{ fontSize: '0.85rem', color: 'var(--accent)', fontWeight: 500 }}>View issues →</span>
+                      </div>
+                    </Link>
+                  ))}
                 </div>
               )}
             </div>

@@ -115,7 +115,7 @@
     "chat_agent_subtitle": "Send a user story or upload PDF/DOCX files to analyze",
     "chat_analyzing": "Analyzing…",
     "chat_empty": "Describe a feature or upload a document to start analysis",
-    "chat_hint1": "As a user I want to reset my password…",
+    "chat_hint1": "As a user I want to update the info...",
     "chat_hint2": "Analyze the attached spec",
     "chat_hint3": "User story: checkout flow…",
     "chat_placeholder": "Describe a feature or user story… (Enter to send, Shift+Enter for new line)",

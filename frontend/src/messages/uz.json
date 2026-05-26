@@ -115,9 +115,9 @@
     "chat_agent_subtitle": "Tahlil uchun foydalanuvchi hikoyasini yuboring yoki PDF/DOCX yuklang",
     "chat_analyzing": "Tahlil qilinmoqda…",
     "chat_empty": "Tahlilni boshlash uchun xususiyatni tavsiflang yoki hujjat yuklang",
-    "chat_hint1": "Foydalanuvchi sifatida parolni tiklashni xohlayman…",
+    "chat_hint1": "Foydalanuvchi sifatida ma’lumotlarimni yangilamoqchiman…",
     "chat_hint2": "Ilova qilingan spetsifikatsiyani tahlil qiling",
-    "chat_hint3": "Foydalanuvchi hikoyasi: checkout jarayoni…",
+    "chat_hint3": "Foydalanuvchi hikoyasi: rasmiylashtirish jarayoni...",
     "chat_placeholder": "Xususiyat yoki foydalanuvchi hikoyasini tavsiflang… (Enter — yuborish, Shift+Enter — yangi qator)",
     "chat_file_hint": "PDF yoki DOCX · max 5 ta fayl · 10 MB gacha",
     "chat_error_default": "Nimadir noto'g'ri ketdi. Qayta urinib ko'ring."
