@@ -29,6 +29,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Не редиректить /path/ -> /path: 307 на trailing slash ломал CORS/JSON на фронте
+app.router.redirect_slashes = False
+
 Base.metadata.create_all(bind=engine)
 
 app.add_middleware(
