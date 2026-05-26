@@ -20,30 +20,18 @@ router = APIRouter(prefix="/projects", tags=["Analysis"])
 
 AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://fintech-radar-ai:8001")
 
-_STUB_DASHBOARD = {
-    "zones": [
-        {"id": "gdpr", "label": "GDPR", "severity": "high"},
-        {"id": "psd2", "label": "PSD2/PSD3", "severity": "medium"},
-    ],
-    "risks": [
-        {
-            "zone_id": "gdpr",
-            "explanation": "Обработка платёжных данных подпадает под Art. 9 GDPR.",
-            "article": "GDPR Art. 9",
-            "url": "https://gdpr-info.eu/art-9-gdpr/",
-            "severity": "high",
-        }
-    ],
-    "checklist": [
-        {"role": "PO", "items": ["Добавить экран согласия на обработку данных"]},
-        {"role": "Compliance", "items": ["Провести DPIA (Art. 35 GDPR)"]},
-        {"role": "Engineering", "items": ["Логировать операции с timestamp"]},
-    ],
-    "documents": [
-        "Privacy Policy → раздел 'Платёжные данные'",
-        "Terms of Service → раздел 'Виртуальные карты'",
-    ],
-}
+# Когда AI-сервис недоступен — отдаём пустой дашборд и понятное сообщение
+# (фронт рендерит summary как текст бабла, если он есть).
+_EMPTY_DASHBOARD = {"zones": [], "risks": [], "checklist": [], "documents": []}
+
+_AI_UNAVAILABLE_MESSAGE = (
+    "⚠️ **AI-сервис сейчас недоступен** — выполнить анализ не получилось.\n\n"
+    "Что можно сделать:\n"
+    "- Повторить запрос через минуту\n"
+    "- Проверить, что AI-сервис (ai-core) запущен и доступен\n"
+    "- Если ошибка повторяется — сообщить администратору\n\n"
+    "Запрос сохранён в истории, повторная отправка ничего не сломает."
+)
 
 
 def _build_jira_comment(summary: dict) -> str:
@@ -79,8 +67,8 @@ async def _call_ai(project: Project, feature_text: str) -> dict:
             resp.raise_for_status()
             return resp.json()
     except Exception:
-        # AI-сервис недоступен — возвращаем стаб чтобы пайплайн не ломался
-        return {"dashboard": _STUB_DASHBOARD, "summary": None}
+        # AI-сервис недоступен — отдаём пустой дашборд + понятное сообщение
+        return {"dashboard": _EMPTY_DASHBOARD, "summary": _AI_UNAVAILABLE_MESSAGE}
 
 
 @router.post("/{project_id}/analyze", response_model=AnalyzeResponse,
@@ -95,7 +83,7 @@ async def analyze(
     project = _get_project_or_404(project_id, current_user.id, db)
 
     ai_response = await _call_ai(project, text)
-    dashboard = ai_response.get("dashboard", _STUB_DASHBOARD)
+    dashboard = ai_response.get("dashboard", _EMPTY_DASHBOARD)
     summary = ai_response.get("summary")
     report = ai_response.get("report")     # full FinalReport — pass-through
 
