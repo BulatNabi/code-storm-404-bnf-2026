@@ -101,7 +101,7 @@ cd code-storm-404-bnf-2026
 docker network create fintech-radar-net
 
 # 3. Поднять Elasticsearch (нужен для AI-Core)
-cd ai-core && docker-compose up -d elasticsearch && cd ..
+cd workers && docker-compose up -d elasticsearch && cd ..
 # подождать ~30 секунд пока ES стартует
 
 # 4. Настроить AI-Core
@@ -162,10 +162,10 @@ docker network create fintech-radar-net
 
 ### 4.2. Elasticsearch
 
-Поднимается из `ai-core/docker-compose.yml`. Используется и AI-Core, и Workers.
+Поднимается из `workers/docker-compose.yml` (один общий ES для AI-Core и Workers).
 
 ```bash
-cd ai-core
+cd workers
 docker-compose up -d elasticsearch
 ```
 
@@ -534,7 +534,7 @@ Backend настроен на `allow_origins=["*"]`, так что CORS не д�
 
 ### Elasticsearch падает с OOM
 
-Уменьши heap-size в `ai-core/docker-compose.yml`:
+Уменьши heap-size в `workers/docker-compose.yml`:
 ```yaml
 - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
 ```
@@ -555,6 +555,10 @@ docker-compose stop lex_worker
 - Elasticsearch: `9200` → `"9201:9200"`
 - Postgres: `5435` (нестандартный, чтобы не конфликтовать с локальным)
 - Kafka: `9094`
+
+### Регистрация падает: `value is not a valid email address: ... special-use or reserved name`
+
+Backend использует `pydantic.EmailStr`, который сверяется с IANA special-use registry. Зарезервированные TLD (`.local`, `.test`, `.example`, `.localhost`, `.invalid`) отбраковываются с этой ошибкой. Используй обычный домен: `test@gmail.com`, `me@mail.ru` и т.п.
 
 ### Полный сброс данных
 

@@ -66,15 +66,16 @@ docs/       — архитектура, AI-концепция, деплой, д�
 docker network create fintech-radar-net
 
 # 2. Заполнить .env для каждого сервиса
-cp backend/.env.example backend/.env       # вписать S3, Kafka, AI_SERVICE_URL
-cp workers/.env.example workers/.env       # вписать LLM API keys, Kafka, ES
+cp backend/.env.example backend/.env       # S3, Kafka, AI_SERVICE_URL
+cp workers/.env.example workers/.env       # LLM_API_KEY (OpenRouter), Kafka, ES
 
-# 3. Поднять сервисы (в любом порядке)
+# 3. Поднять сервисы (в указанном порядке)
 cd backend && docker-compose up -d --build
-cd ../ai-core && docker-compose up -d --build
-cd ../workers && docker-compose up -d --build
+cd ../workers && docker-compose up -d --build     # ES + ETL + AI-Core agent одним compose'ом
 cd ../frontend && npm install && npm run dev
 ```
+
+> ⚠️ **При регистрации не используйте email с TLD `.local` / `.test` / `.example` / `.localhost`** — pydantic'овский email-validator сверяется с IANA special-use registry и отбраковывает их. Подойдёт обычный `test@gmail.com`.
 
 **Доступ:**
 - Frontend: http://localhost:3000
