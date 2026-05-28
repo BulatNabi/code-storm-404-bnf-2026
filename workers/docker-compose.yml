@@ -196,8 +196,24 @@ services:
     ports:
       - "8001:8001"
     extra_hosts: *host-aliases
+    networks:
+      # default — чтобы видеть Elasticsearch и остальных workers в этом compose
+      default: {}
+      # fintech-radar-net — общая сеть с backend; alias делает агента доступным
+      # под именем `fintech-radar-ai`, которое backend ждёт по дефолту (см.
+      # backend/app/routers/analysis.py: AI_SERVICE_URL=http://fintech-radar-ai:8001)
+      fintech-radar-net:
+        aliases:
+          - fintech-radar-ai
 
 volumes:
   postgres_data:
   md_converter_cache:
   elasticsearch_data:
+
+networks:
+  # Общая сеть с backend / frontend. Создаётся отдельно:
+  #   docker network create fintech-radar-net
+  fintech-radar-net:
+    name: fintech-radar-net
+    external: true
